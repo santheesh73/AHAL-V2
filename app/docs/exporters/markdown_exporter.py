@@ -1,0 +1,152 @@
+from app.docs.models import PRDResult
+from app.docs.utils.evidence_sanitizer import sanitize_text
+from app.intelligence.consistency_validator import OutputConsistencyValidator
+
+class MarkdownExporter:
+    def __init__(self):
+        self.validator = OutputConsistencyValidator()
+
+    def export(self, prd_result: PRDResult) -> str:
+        prd_result = self.validator.validate_export_prd(prd_result)
+        lines = []
+        lines.append("# Project Requirement Document\n")
+        
+        # 1. Project Overview
+        lines.append(self._format_section("1. Project Overview", prd_result.overview))
+        
+        # 1.5 Project Intelligence Brief
+        if getattr(prd_result, "project_brief", None):
+            pb = prd_result.project_brief
+            lines.append("## Project Intelligence Brief\n")
+            lines.append(f"### Project Goal\n{sanitize_text(pb.goal.content)}\n")
+            lines.append(f"### What This Project Is\n{sanitize_text(pb.what.content)}\n")
+            lines.append(f"### Why This Project Exists\n{sanitize_text(pb.why.content)}\n")
+            
+            lines.append("### What Is Already Built\n")
+            for item in pb.completed:
+                lines.append(f"- **{item.title}**: {item.description}")
+            lines.append("")
+                
+            lines.append("### What Is Remaining\n")
+            for item in pb.remaining:
+                lines.append(f"- **{item.title}**: {item.description}")
+            lines.append("")
+            
+            lines.append("### Current Issues\n")
+            if not pb.issues:
+                lines.append("No critical issues detected.\n")
+            else:
+                for issue in pb.issues:
+                    lines.append(f"- **{issue.title}** ({issue.severity}): {issue.description}")
+            lines.append("")
+                    
+            lines.append("### Recommended Next Steps\n")
+            for step in pb.next_steps:
+                lines.append(f"- {step}")
+            lines.append("")
+        
+        # 2. Architecture
+        lines.append(self._format_section("2. Architecture", prd_result.architecture))
+        
+        # 3. Tech Stack
+        lines.append(self._format_section("3. Tech Stack", prd_result.tech_stack))
+        
+        # 4. Core Modules
+        lines.append("## 4. Core Modules\n")
+        if not prd_result.modules:
+            lines.append("Insufficient evidence from codebase.\n")
+        else:
+            lines.append("| Module | Category | Description | Files | Confidence |")
+            lines.append("|---|---|---|---|---|")
+            for mod in prd_result.modules:
+                files_str = ", ".join(mod.files) if mod.files else "None"
+                files_str = self._escape_table(files_str)
+                name = self._escape_table(mod.name)
+                cat = self._escape_table(mod.category)
+                desc = self._escape_table(mod.description)
+                conf = self._escape_table(mod.confidence)
+                lines.append(f"| {name} | {cat} | {desc} | {files_str} | {conf} |")
+            lines.append("")
+            
+        # 5. API Surface
+        lines.append("## 5. API Surface\n")
+        if not prd_result.api_endpoints:
+            lines.append("Insufficient evidence from codebase.\n")
+        else:
+            lines.append("| Method | Path | Framework | Source File | Confidence |")
+            lines.append("|---|---|---|---|---|")
+            for api in prd_result.api_endpoints:
+                method = self._escape_table(api.method)
+                path = self._escape_table(api.path)
+                fw = self._escape_table(api.framework)
+                src = self._escape_table(api.source_file or "Unknown")
+                conf = self._escape_table(api.confidence)
+                lines.append(f"| {method} | {path} | {fw} | {src} | {conf} |")
+            lines.append("")
+            
+        # 6. Workflow
+        lines.append("## 6. Workflow\n")
+        if not prd_result.workflow:
+            lines.append("Insufficient evidence from codebase.\n")
+        else:
+            for wf in sorted(prd_result.workflow, key=lambda x: x.order):
+                target = f" -> {wf.target}" if wf.target else ""
+                lines.append(f"{wf.order}. **{wf.source}** {wf.action}{target} *(Confidence: {wf.confidence})*")
+            lines.append("")
+            
+        # 7. Database / Storage
+        lines.append(self._format_section("7. Database / Storage", prd_result.databases))
+        
+        # 8. Setup & Run Notes
+        lines.append(self._format_section("8. Setup & Run Notes", prd_result.setup_notes))
+        
+        # 9. Risks & Gaps
+        lines.append("## 9. Risks & Gaps\n")
+        if not prd_result.risks:
+            lines.append("No critical risks detected.\n")
+        else:
+            lines.append("| Title | Severity | Description | Recommendation |")
+            lines.append("|---|---|---|---|")
+            for risk in prd_result.risks:
+                title = self._escape_table(risk.title)
+                sev = self._escape_table(risk.severity)
+                desc = self._escape_table(risk.description)
+                rec = self._escape_table(risk.recommendation)
+                lines.append(f"| {title} | {sev} | {desc} | {rec} |")
+            lines.append("")
+            
+        # 10. Evidence Summary
+        lines.append("## 10. Evidence Summary\n")
+        lines.append(f"- **Overall Confidence**: {prd_result.confidence.title()}")
+        lines.append(f"- **Total Evidence Items**: {prd_result.evidence_count}")
+        if prd_result.warnings:
+            lines.append("- **Warnings**:")
+            for w in prd_result.warnings:
+                lines.append(f"  - {w}")
+        lines.append("")
+        
+        return "\n".join(lines)
+
+    def _format_section(self, title: str, section) -> str:
+        lines = []
+        lines.append(f"## {title}\n")
+        
+        if not section or not section.content:
+            lines.append("Insufficient evidence from codebase.\n")
+            return "\n".join(lines)
+            
+        lines.append(f"*(Confidence: {section.confidence.title()})*\n")
+        
+        if section.warnings:
+            for w in section.warnings:
+                lines.append(f"> **Warning**: {w}")
+            lines.append("")
+            
+        lines.append(sanitize_text(section.content))
+        lines.append("")
+        return "\n".join(lines)
+        
+    def _escape_table(self, text: str) -> str:
+        if not text:
+            return ""
+        return str(text).replace("|", "\\|").replace("\n", " ")

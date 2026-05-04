@@ -1,0 +1,21 @@
+{
+  "package": "AHAL AI Frontend v2 Public Demo",
+  "generatedAt": "2026-05-03T10:57:30.921Z",
+  "entry": "dist/index.html",
+  "backendUrl": "http://localhost:8000",
+  "commands": {
+    "backend": "cd \"C:\\Users\\babus\\OneDrive\\Desktop\\AHAL v2\" && python -m app.main",
+    "frontend": "cd \"C:\\Users\\babus\\OneDrive\\Desktop\\AHAL v2\\frontend\" && npm run dev",
+    "build": "npm run build",
+    "package": "npm run package:demo"
+  },
+  "regressionCriteria": [
+    "Do not display content management application when explicit metadata says developer tool.",
+    "Do not show MongoDB as a language.",
+    "Do not duplicate POST /analyze or GET /status variants.",
+    "Do not show types/index.ts initializes FastAPI.",
+    "Do not show long nested paths in primary UI.",
+    "Do not expose .env.example or raw mongodb:// evidence in primary UI.",
+    "Test gap, onboarding, repo index, delta scan, chat, and downloads must remain reachable from dashboard."
+  ]
+}

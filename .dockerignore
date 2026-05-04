@@ -1,0 +1,15 @@
+.git
+.venv
+venv
+__pycache__
+.pytest_cache
+node_modules
+frontend/node_modules
+tmp-pytest
+tmp-pytest-run2
+.env
+*.zip
+*.pdf
+.coverage
+coverage
+htmlcov

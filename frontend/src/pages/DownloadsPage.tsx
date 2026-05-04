@@ -1,0 +1,36 @@
+import { Navigate, useParams } from "react-router-dom"
+import { DownloadCenter } from "../components/downloads/DownloadCenter"
+import { AppShell } from "../components/layout/AppShell"
+import { ScrollReveal } from "../components/ui/ScrollReveal"
+import { SectionHeader } from "../components/ui/SectionHeader"
+import { isBackendConfigured } from "../lib/ahal-api"
+
+export function DownloadsPage() {
+  const { sessionId } = useParams()
+
+  if (!sessionId) {
+    return <Navigate to="/analyze" replace />
+  }
+
+  return (
+    <AppShell
+      title="Downloads"
+      subtitle="Export the same intelligence as PDF, Markdown, LaTeX, or JSON."
+      sessionId={sessionId}
+      demoMode={!isBackendConfigured()}
+    >
+      <div className="space-y-8">
+        <ScrollReveal>
+          <SectionHeader
+            eyebrow="Report Delivery"
+            title="Professional exports for product, engineering, and onboarding workflows"
+            description="The download center stays consistent with the same validated session intelligence shown in the dashboard."
+          />
+        </ScrollReveal>
+        <ScrollReveal delay={0.06}>
+          <DownloadCenter sessionId={sessionId} />
+        </ScrollReveal>
+      </div>
+    </AppShell>
+  )
+}
