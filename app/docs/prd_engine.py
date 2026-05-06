@@ -13,10 +13,17 @@ from app.docs.generators.setup_generator import SetupGenerator
 from app.docs.generators.risk_generator import RiskGenerator
 from app.docs.generators.project_brief_generator import ProjectBriefGenerator
 from app.docs.fact_snapshot import build_fact_snapshot
+from app.intelligence.canonical_presenter import CanonicalProjectPresenter
 from app.intelligence.consistency_validator import OutputConsistencyValidator
+from app.intelligence.output_guard import CanonicalOutputGuard
 from app.intelligence.product_identity import ProductIdentityResolver
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_confidence_for_prd(value: str) -> str:
+    lowered = str(value or "").lower()
+    return lowered if lowered in {"high", "medium", "low"} else "low"
 
 class PRDEngine:
     def __init__(self):
@@ -30,6 +37,7 @@ class PRDEngine:
         self.setup_gen = SetupGenerator()
         self.risk_gen = RiskGenerator()
         self.brief_gen = ProjectBriefGenerator()
+        self.canonical_presenter = CanonicalProjectPresenter()
         self.identity_resolver = ProductIdentityResolver()
         self.validator = OutputConsistencyValidator()
 
@@ -45,10 +53,17 @@ class PRDEngine:
         warnings = []
         identity = self.identity_resolver.resolve(scan_result=scan_result, intelligence_result=intelligence_result)
         snapshot = build_fact_snapshot(scan_result=scan_result, intelligence_result=intelligence_result, product_identity=identity)
+        canonical = self.canonical_presenter.build(
+            session_id=session_id or getattr(scan_result, "session_id", ""),
+            scan_result=scan_result,
+            intelligence_result=intelligence_result,
+            graph_result=graph_result,
+            prd_result=None,
+        )
         
         # 1. overview
         try:
-            overview = self.overview_gen.generate(scan_result, intelligence_result)
+            overview = self.overview_gen.generate(scan_result, intelligence_result, canonical_intelligence=canonical)
             warnings.extend(overview.warnings)
         except Exception as e:
             logger.error(f"Error generating overview: {e}")
@@ -150,7 +165,16 @@ class PRDEngine:
 
         # 9.5 Project Intelligence Brief
         try:
-            project_brief = self.brief_gen.generate(scan_result, intelligence_result, graph_result, overview, risks, snapshot=snapshot, product_identity=identity)
+            project_brief = self.brief_gen.generate(
+                scan_result,
+                intelligence_result,
+                graph_result,
+                overview,
+                risks,
+                snapshot=snapshot,
+                product_identity=identity,
+                canonical_intelligence=canonical,
+            )
             warnings.extend(project_brief.warnings)
             evidence_count += sum(len(x.evidence) for x in [project_brief.goal, project_brief.what, project_brief.why])
             evidence_count += sum(len(x.evidence) for x in project_brief.completed)
@@ -172,11 +196,11 @@ class PRDEngine:
         prd = PRDResult(
             session_id=session_id,
             title="Project Requirements Document",
-            project_type=project_type_str,
+            project_type=canonical.project_type or project_type_str,
             architecture_label=identity.architecture,
             repo_intelligence_score=identity.repo_intelligence_score,
-            architecture_confidence=architecture.confidence,
-            product_purpose_confidence=identity.domain_confidence,
+            architecture_confidence=_safe_confidence_for_prd(canonical.confidence.architecture),
+            product_purpose_confidence=_safe_confidence_for_prd(canonical.confidence.product_purpose),
             overview=overview,
             project_brief=project_brief,
             architecture=architecture,
@@ -189,10 +213,96 @@ class PRDEngine:
             risks=risks,
             confidence=confidence,
             evidence_count=evidence_count,
-            warnings=warnings
+            warnings=warnings,
+            canonical_intelligence=canonical,
         )
         prd.architecture_label = identity.architecture
         prd.repo_intelligence_score = identity.repo_intelligence_score
+        if prd.canonical_intelligence is not None:
+            from app.docs.models import APISectionItem, ProjectStatusItem, RiskItem, WorkflowSectionItem
+            prd.overview.content = prd.canonical_intelligence.product_summary
+            if prd.project_brief is not None:
+                prd.project_brief.goal.content = prd.canonical_intelligence.product_summary
+                prd.project_brief.what.content = prd.canonical_intelligence.what
+                prd.project_brief.why.content = prd.canonical_intelligence.why
+                prd.project_brief.completed = [
+                    ProjectStatusItem(
+                        title=item.title,
+                        status="built",
+                        description=item.description,
+                        evidence=[],
+                        confidence=_safe_confidence_for_prd(item.confidence),
+                    )
+                    for item in prd.canonical_intelligence.completed
+                ]
+                prd.project_brief.remaining = [
+                    ProjectStatusItem(
+                        title=item.title,
+                        status="missing",
+                        description=item.description,
+                        evidence=[],
+                        confidence=_safe_confidence_for_prd(item.confidence),
+                    )
+                    for item in prd.canonical_intelligence.remaining
+                ]
+                prd.project_brief.issues = [
+                    RiskItem(
+                        severity=str(item.severity or "medium").lower() if str(item.severity or "").lower() in {"high", "medium", "low"} else "medium",
+                        title=item.title,
+                        description=item.title,
+                        evidence=[],
+                        recommendation=item.recommendation,
+                    )
+                    for item in prd.canonical_intelligence.issues
+                ]
+                if prd.project_brief.what.content != prd.canonical_intelligence.what:
+                    prd.project_brief.what.content = prd.canonical_intelligence.what
+                assert prd.project_brief.what.content == prd.canonical_intelligence.what
+            prd.api_endpoints = [
+                APISectionItem(
+                    method=item.method,
+                    path=item.path,
+                    framework=item.source,
+                    source_file=item.source,
+                    handler=None,
+                    description=item.purpose,
+                    evidence=[],
+                    confidence="medium",
+                )
+                for item in prd.canonical_intelligence.api_surface
+            ]
+            prd.workflow = [
+                WorkflowSectionItem(
+                    order=item.step,
+                    source=item.title,
+                    action=item.description,
+                    target=None,
+                    evidence=[],
+                    confidence="medium",
+                )
+                for item in prd.canonical_intelligence.workflow
+            ]
+            stack_lines = []
+            if prd.canonical_intelligence.tech_stack.languages:
+                stack_lines.append(f"Languages: {', '.join(prd.canonical_intelligence.tech_stack.languages)}")
+            if prd.canonical_intelligence.tech_stack.frameworks:
+                stack_lines.append(f"Frameworks: {', '.join(prd.canonical_intelligence.tech_stack.frameworks)}")
+            if prd.canonical_intelligence.tech_stack.databases:
+                stack_lines.append(f"Databases / Storage: {', '.join(prd.canonical_intelligence.tech_stack.databases)}")
+            if prd.canonical_intelligence.tech_stack.tools:
+                stack_lines.append(f"Tools: {', '.join(prd.canonical_intelligence.tech_stack.tools)}")
+            if stack_lines:
+                prd.tech_stack.content = ". ".join(stack_lines) + "."
+            prd.databases.content = (
+                f"Databases / storage detected: {', '.join(prd.canonical_intelligence.tech_stack.databases)}."
+                if prd.canonical_intelligence.tech_stack.databases
+                else "No database or storage layer was confirmed from the analyzed evidence."
+            )
+            prd.overview.content = CanonicalOutputGuard.sanitize_text(prd.overview.content, prd.canonical_intelligence)
+            if prd.project_brief is not None:
+                prd.project_brief.goal.content = CanonicalOutputGuard.sanitize_text(prd.project_brief.goal.content, prd.canonical_intelligence)
+                prd.project_brief.what.content = prd.canonical_intelligence.what
+                prd.project_brief.why.content = CanonicalOutputGuard.sanitize_text(prd.project_brief.why.content, prd.canonical_intelligence)
         return self.validator.validate_prd(prd, identity)
 
     def _fallback_section(self, title: str, content: str) -> PRDSection:

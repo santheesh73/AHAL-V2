@@ -250,3 +250,42 @@ def test_issues_question_uses_project_brief():
 
     answer = engine.answer("What are the issues?", scan, intelligence, graph)
     assert "issues" in answer.answer.lower() or "no critical issues" in answer.answer.lower()
+
+
+def test_hi_through_engine_returns_casual():
+    scan = empty_scan_result()
+    intelligence = IntelligenceEngine().analyze(scan)
+    graph = KnowledgeGraphEngine().build(scan, intelligence)
+    engine = ChatEngine(llm_client=GeminiChatClient(enabled=False))
+
+    answer = engine.answer("hi", scan, intelligence, graph)
+    assert "hi" in answer.answer.lower() or "help" in answer.answer.lower()
+    assert answer.intent == "casual"
+    assert not answer.evidence
+    assert not answer.sections
+
+
+def test_unsupported_question_through_engine_returns_safe_refusal():
+    scan = empty_scan_result()
+    intelligence = IntelligenceEngine().analyze(scan)
+    graph = KnowledgeGraphEngine().build(scan, intelligence)
+    engine = ChatEngine(llm_client=GeminiChatClient(enabled=False))
+
+    answer = engine.answer("What is my bank password?", scan, intelligence, graph)
+    assert "enough relevant project evidence" in answer.answer.lower()
+    assert answer.intent == "unsupported"
+    assert not answer.evidence
+
+
+def test_repo_question_still_routes_to_repo_pipeline():
+    scan = python_fastapi_scan()
+    intelligence = IntelligenceEngine().analyze(scan)
+    graph = KnowledgeGraphEngine().build(scan, intelligence)
+    engine = ChatEngine(llm_client=GeminiChatClient(enabled=False))
+
+    # "What does this project do?" should still trigger repo pipeline
+    answer = engine.answer("What does this project do?", scan, intelligence, graph)
+    assert answer.intent == "project_overview"
+    assert answer.evidence
+    assert answer.sections
+

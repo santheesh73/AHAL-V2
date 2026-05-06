@@ -1,23 +1,43 @@
-import { Navigate, useParams } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { useParams } from "react-router-dom"
 import { ChatPanel } from "../components/chat/ChatPanel"
 import { AppShell } from "../components/layout/AppShell"
 import { ScrollReveal } from "../components/ui/ScrollReveal"
 import { SectionHeader } from "../components/ui/SectionHeader"
-import { isBackendConfigured } from "../lib/ahal-api"
+import { getIntelligence, isBackendConfigured } from "../lib/ahal-api"
+import { demoSessionId } from "../lib/mock-data"
+import type { IntelligenceData } from "../lib/types"
 
 export function ChatPage() {
   const { sessionId } = useParams()
+  const resolvedSessionId = sessionId ?? demoSessionId
+  const usingDemoSession = !sessionId || sessionId === demoSessionId
+  const [intelligence, setIntelligence] = useState<IntelligenceData | null>(null)
 
-  if (!sessionId) {
-    return <Navigate to="/analyze" replace />
-  }
+  useEffect(() => {
+    let active = true
+    void getIntelligence(resolvedSessionId)
+      .then((result) => {
+        if (active) {
+          setIntelligence(result.data)
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setIntelligence(null)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [resolvedSessionId])
 
   return (
     <AppShell
       title="Repo Chat"
       subtitle="Ask grounded questions about the analyzed project with cleaned evidence references."
-      sessionId={sessionId}
-      demoMode={!isBackendConfigured()}
+      sessionId={resolvedSessionId}
+      demoMode={usingDemoSession || !isBackendConfigured()}
     >
       <div className="space-y-8">
         <ScrollReveal>
@@ -28,7 +48,7 @@ export function ChatPage() {
           />
         </ScrollReveal>
         <ScrollReveal delay={0.06}>
-          <ChatPanel sessionId={sessionId} />
+          <ChatPanel sessionId={resolvedSessionId} intelligence={intelligence} />
         </ScrollReveal>
       </div>
     </AppShell>

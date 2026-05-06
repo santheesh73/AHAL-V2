@@ -31,7 +31,7 @@ export function Sidebar({ sessionId }: SidebarProps) {
 
         <nav className="space-y-2">
           {items.map((item) => {
-            const href = item.sessionAware ? (sessionId ? `${item.to}/${sessionId}` : "/analyze") : item.to
+            const href = item.sessionAware ? (sessionId ? `${item.to}/${sessionId}` : item.to) : item.to
             const Icon = item.icon
             return (
               <NavLink
@@ -61,7 +61,7 @@ export function Sidebar({ sessionId }: SidebarProps) {
 
       <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 border-t border-white/10 bg-slate-950/90 px-2 py-2 backdrop-blur-xl lg:hidden">
         {items.map((item) => {
-          const href = item.sessionAware ? (sessionId ? `${item.to}/${sessionId}` : "/analyze") : item.to
+          const href = item.sessionAware ? (sessionId ? `${item.to}/${sessionId}` : item.to) : item.to
           const Icon = item.icon
           return (
             <NavLink

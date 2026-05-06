@@ -5,10 +5,7 @@ import { ConfidenceBadge } from "../ui/ConfidenceBadge"
 import { GlassCard } from "../ui/GlassCard"
 
 export function ProjectBriefGrid({ intelligence }: { intelligence: IntelligenceData }) {
-  const whatText =
-    safeText(intelligence.what, "") && safeText(intelligence.what, "") !== safeText(intelligence.projectSummary, "")
-      ? intelligence.what
-      : "The product behavior is summarized in the project overview above and reflected in the detected APIs, workflow, and evidence."
+  const whatText = safeText(intelligence.what, "") || "What the project does is only partially specified in the available output."
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">

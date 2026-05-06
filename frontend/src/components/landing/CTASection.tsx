@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom"
 import { Button } from "../ui/Button"
-import { DemoFlowButton } from "./DemoFlowButton"
 import { GlassCard } from "../ui/GlassCard"
 import { SectionHeader } from "../ui/SectionHeader"
 
@@ -17,9 +16,8 @@ export function CTASection() {
             />
             <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
               <Link to="/analyze">
-                <Button size="lg">Analyze Project</Button>
+                <Button size="lg">Start Analyzing</Button>
               </Link>
-              <DemoFlowButton>Open Demo Dashboard</DemoFlowButton>
             </div>
           </div>
         </GlassCard>

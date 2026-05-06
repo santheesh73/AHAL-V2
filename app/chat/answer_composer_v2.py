@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.chat.constants import INSUFFICIENT_EVIDENCE_MESSAGE
 from app.chat.models import ChatAnswer, ChatAnswerSection, ChatContextPack
 from app.chat.utils import build_followups, filter_chat_evidence, sanitize_chat_answer, sanitize_chat_text
+from app.intelligence.output_guard import CanonicalOutputGuard
 
 
 class AnswerComposerV2:
@@ -31,7 +32,7 @@ class AnswerComposerV2:
                 fallback_used=True,
             ))
 
-        direct_answer = self._direct_answer(intent_name, context_pack)
+        direct_answer = self._direct_answer(question, intent_name, context_pack)
         followup_intent = intent_name
         if intent_name == "project_overview":
             sections.extend(self._overview_sections(context_pack))
@@ -71,10 +72,24 @@ class AnswerComposerV2:
         if not warnings and confidence != "high":
             warnings.append("The analyzed evidence does not fully specify every detail, so some points remain conservative.")
 
+        answer_text = "\n\n".join(part for part in answer_parts if part).strip()
+        canonical = context_pack.canonical_intelligence
+        answer_text = CanonicalOutputGuard.sanitize_text(answer_text, canonical)
+        short_answer = CanonicalOutputGuard.sanitize_text(direct_answer, canonical)
+        sanitized_sections = [
+            ChatAnswerSection(
+                title=CanonicalOutputGuard.sanitize_text(section.title, canonical),
+                content=CanonicalOutputGuard.sanitize_text(section.content, canonical),
+                bullets=[CanonicalOutputGuard.sanitize_text(item, canonical) for item in section.bullets],
+                evidence_ids=section.evidence_ids,
+            )
+            for section in sections
+        ]
+
         return sanitize_chat_answer(ChatAnswer(
-            answer="\n\n".join(part for part in answer_parts if part).strip(),
-            short_answer=direct_answer,
-            sections=sections,
+            answer=answer_text,
+            short_answer=short_answer,
+            sections=sanitized_sections,
             confidence=confidence,
             evidence=evidence,
             related_files=sorted({ev.file for ev in evidence if ev.file}),
@@ -88,19 +103,20 @@ class AnswerComposerV2:
         ))
 
     def _compose_from_llm(self, intent, context_pack: ChatContextPack, llm_result) -> ChatAnswer:
+        canonical = context_pack.canonical_intelligence
         sections = []
         for item in llm_result.get("sections", []) or []:
             sections.append(
                 ChatAnswerSection(
-                    title=sanitize_chat_text(item.get("title"), "Answer"),
-                    content=sanitize_chat_text(item.get("content"), ""),
-                    bullets=[sanitize_chat_text(bullet) for bullet in item.get("bullets", []) if sanitize_chat_text(bullet)],
+                    title=CanonicalOutputGuard.sanitize_text(sanitize_chat_text(item.get("title"), "Answer"), canonical),
+                    content=CanonicalOutputGuard.sanitize_text(sanitize_chat_text(item.get("content"), ""), canonical),
+                    bullets=[CanonicalOutputGuard.sanitize_text(sanitize_chat_text(bullet), canonical) for bullet in item.get("bullets", []) if sanitize_chat_text(bullet)],
                     evidence_ids=[str(ev).replace("[", "").replace("]", "") for ev in item.get("evidence_ids", []) if str(ev).strip()],
                 )
             )
         return sanitize_chat_answer(ChatAnswer(
-            answer=sanitize_chat_text(llm_result.get("answer"), INSUFFICIENT_EVIDENCE_MESSAGE),
-            short_answer=sanitize_chat_text(llm_result.get("short_answer"), ""),
+            answer=CanonicalOutputGuard.sanitize_text(sanitize_chat_text(llm_result.get("answer"), INSUFFICIENT_EVIDENCE_MESSAGE), canonical),
+            short_answer=CanonicalOutputGuard.sanitize_text(sanitize_chat_text(llm_result.get("short_answer"), ""), canonical),
             sections=sections,
             confidence=context_pack.confidence,
             evidence=filter_chat_evidence(context_pack.selected_evidence, limit=8),
@@ -114,15 +130,28 @@ class AnswerComposerV2:
             fallback_used=False,
         ))
 
-    def _direct_answer(self, intent_name: str, context_pack: ChatContextPack) -> str:
+    def _direct_answer(self, question: str, intent_name: str, context_pack: ChatContextPack) -> str:
         identity_summary = context_pack.project_identity.get("summary") or ""
+        canonical = context_pack.canonical_intelligence
         architecture_type = context_pack.architecture_summary.get("type", "unknown")
         uncertainty = self._uncertainty_sentence(context_pack)
+        normalized_question = str(question or "").strip().lower()
         if intent_name == "project_goal":
+            canonical_why = getattr(canonical, "why", "") if canonical is not None else ""
+            if "why" in normalized_question and canonical_why:
+                return canonical_why
+            canonical_summary = getattr(canonical, "product_summary", "") if canonical is not None else ""
+            if canonical_summary:
+                return canonical_summary
             if identity_summary:
                 return identity_summary
             return "The analyzed evidence suggests a developer-facing code intelligence workflow, but the exact business goal is only partially specified."
         if intent_name in {"project_overview", "general_repo_question"}:
+            canonical_summary = getattr(canonical, "product_summary", "") if canonical is not None else ""
+            if canonical_summary:
+                if uncertainty and uncertainty.lower() not in canonical_summary.lower():
+                    return f"{canonical_summary.rstrip('.')}." + f" {uncertainty}"
+                return canonical_summary
             if identity_summary:
                 if uncertainty and uncertainty.lower() not in identity_summary.lower():
                     return f"{identity_summary.rstrip('.')}." + f" {uncertainty}"
@@ -132,17 +161,10 @@ class AnswerComposerV2:
                 return f"{fallback} {uncertainty}"
             return fallback
         if intent_name == "what_is_built":
-            capabilities = []
-            if context_pack.relevant_apis:
-                capabilities.append("backend API workflows")
-            if context_pack.relevant_modules:
-                capabilities.append("structured modules and service layers")
-            if context_pack.relevant_onboarding_steps:
-                capabilities.append("onboarding guidance")
-            if context_pack.relevant_test_gaps:
-                capabilities.append("test-gap analysis")
-            if capabilities:
-                return f"This repo already appears to include {', '.join(capabilities[:4])}."
+            completed = list(getattr(canonical, "completed", []) or [])
+            if completed:
+                titles = ", ".join(item.title for item in completed[:4])
+                return f"This project already includes {titles}."
             return "This repo has detected implementation evidence, but the full built surface is only partially specified."
         if intent_name == "api_explanation":
             if context_pack.relevant_apis:
@@ -164,6 +186,9 @@ class AnswerComposerV2:
         if intent_name in {"file_explanation", "module_explanation"}:
             return "The requested file or module can be explained from its detected role, related APIs, and nearby evidence."
         if intent_name == "what_remaining":
+            remaining = list(getattr(canonical, "remaining", []) or [])
+            if remaining:
+                return "Remaining work appears to include " + ", ".join(item.title for item in remaining[:4]) + "."
             return "Remaining work appears to include unresolved areas that should be confirmed from docs and tests."
         if identity_summary:
             return identity_summary
@@ -172,9 +197,16 @@ class AnswerComposerV2:
     def _overview_sections(self, context_pack: ChatContextPack) -> list[ChatAnswerSection]:
         sections: list[ChatAnswerSection] = []
         evidence_ids = list(context_pack.evidence_map.keys())[:3]
+        canonical = context_pack.canonical_intelligence
+        canonical_what = sanitize_chat_text(getattr(canonical, "what", ""), "")
+        if canonical_what:
+            sections.append(ChatAnswerSection(title="What it is", content=canonical_what, evidence_ids=evidence_ids))
         what_it_is_bits = []
         project_type = sanitize_chat_text(context_pack.project_identity.get("project_type"), "")
         frameworks = [sanitize_chat_text(item, "") for item in context_pack.project_identity.get("frameworks", [])[:4] if sanitize_chat_text(item, "")]
+        domain = sanitize_chat_text(context_pack.project_identity.get("domain"), "")
+        if domain:
+            what_it_is_bits.append(f"Product domain: {domain}.")
         if project_type and project_type != "unknown":
             what_it_is_bits.append(f"Project type: {project_type}.")
         if frameworks:
@@ -197,7 +229,10 @@ class AnswerComposerV2:
         if context_pack.relevant_apis:
             api_bullets = []
             for item in context_pack.relevant_apis[:4]:
-                api_bullets.append(f"{item['method']} {item['path']}")
+                detail = f"{item['method']} {item['path']}"
+                if item.get("handler"):
+                    detail += f": {item['handler']}"
+                api_bullets.append(detail)
             sections.append(ChatAnswerSection(title="Key API", bullets=api_bullets, evidence_ids=evidence_ids))
 
         uncertainty = self._uncertainty_sentence(context_pack)
@@ -230,7 +265,7 @@ class AnswerComposerV2:
         return [ChatAnswerSection(title="Architecture", bullets=bullets, evidence_ids=list(context_pack.evidence_map.keys())[:3])]
 
     def _workflow_sections(self, context_pack: ChatContextPack) -> list[ChatAnswerSection]:
-        bullets = [f"{item['order']}. {item['action']}" for item in context_pack.relevant_workflow[:6]]
+        bullets = [f"{item['order']}. {item['source']}: {item['action']}" for item in context_pack.relevant_workflow[:6]]
         return [ChatAnswerSection(title="Workflow Steps", bullets=bullets, evidence_ids=list(context_pack.evidence_map.keys())[:3])]
 
     def _test_gap_sections(self, context_pack: ChatContextPack) -> list[ChatAnswerSection]:

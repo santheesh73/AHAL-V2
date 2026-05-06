@@ -1,23 +1,22 @@
-import { Navigate, useParams } from "react-router-dom"
+import { useParams } from "react-router-dom"
 import { DownloadCenter } from "../components/downloads/DownloadCenter"
 import { AppShell } from "../components/layout/AppShell"
 import { ScrollReveal } from "../components/ui/ScrollReveal"
 import { SectionHeader } from "../components/ui/SectionHeader"
 import { isBackendConfigured } from "../lib/ahal-api"
+import { demoSessionId } from "../lib/mock-data"
 
 export function DownloadsPage() {
   const { sessionId } = useParams()
-
-  if (!sessionId) {
-    return <Navigate to="/analyze" replace />
-  }
+  const resolvedSessionId = sessionId ?? demoSessionId
+  const usingDemoSession = !sessionId || sessionId === demoSessionId
 
   return (
     <AppShell
       title="Downloads"
       subtitle="Export the same intelligence as PDF, Markdown, LaTeX, or JSON."
-      sessionId={sessionId}
-      demoMode={!isBackendConfigured()}
+      sessionId={resolvedSessionId}
+      demoMode={usingDemoSession || !isBackendConfigured()}
     >
       <div className="space-y-8">
         <ScrollReveal>
@@ -28,7 +27,7 @@ export function DownloadsPage() {
           />
         </ScrollReveal>
         <ScrollReveal delay={0.06}>
-          <DownloadCenter sessionId={sessionId} />
+          <DownloadCenter sessionId={resolvedSessionId} />
         </ScrollReveal>
       </div>
     </AppShell>

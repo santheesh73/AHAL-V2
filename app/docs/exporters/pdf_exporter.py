@@ -6,6 +6,7 @@ from app.docs.exporters.diagram_renderer import render_architecture_diagram, ren
 from app.docs.utils.evidence_sanitizer import sanitize_text
 from app.docs.utils.production_text import safe_remaining_summary, safe_risk_summary
 from app.intelligence.consistency_validator import OutputConsistencyValidator
+from app.intelligence.output_guard import CanonicalOutputGuard
 
 class AHALPDF(FPDF):
     def header(self):
@@ -27,6 +28,20 @@ class PDFExporter:
     def __init__(self):
         self.validator = OutputConsistencyValidator()
 
+    def _assert_canonical_domain_safety(self, prd_result: PRDResult) -> None:
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical is None:
+            return
+        checked_values = [
+            getattr(canonical, "product_summary", ""),
+            getattr(canonical, "what", ""),
+            getattr(canonical, "why", ""),
+            getattr(getattr(getattr(prd_result, "project_brief", None), "what", None), "content", ""),
+            getattr(getattr(prd_result, "overview", None), "content", ""),
+        ]
+        for value in checked_values:
+            CanonicalOutputGuard.assert_no_forbidden_terms(str(value or ""), canonical)
+
     def _safe_text(self, value, default=""):
         text = sanitize_text(value, fallback=default)
         text = self._remove_ignored_paths(text)
@@ -47,6 +62,8 @@ class PDFExporter:
     def export(self, prd_result: PRDResult, polished_text: dict | None = None, polished_markdown: str | None = None) -> bytes:
         prd_result = self.validator.validate_export_prd(prd_result)
         snapshot = build_fact_snapshot(prd_result=prd_result)
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        self._assert_canonical_domain_safety(prd_result)
         pdf = AHALPDF()
         export_warnings = self._meaningful_warnings(prd_result)
         polished_text = polished_text if isinstance(polished_text, dict) else None
@@ -59,7 +76,11 @@ class PDFExporter:
         self._render_title_page(pdf, prd_result, snapshot)
 
         self._section(pdf, "Executive Summary")
-        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "executive_summary", self._section_content(getattr(prd_result, "overview", None))))
+        executive_summary = CanonicalOutputGuard.sanitize_text(
+            getattr(canonical, "product_summary", None) or self._section_content(getattr(prd_result, "overview", None)),
+            canonical,
+        )
+        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "executive_summary", executive_summary))
         self._paragraph(pdf, f"Project Type: {self._safe_text(getattr(prd_result, 'project_type', 'Unknown'))}.")
         self._paragraph(pdf, f"Architecture Confidence: {self._safe_text(getattr(prd_result, 'architecture_confidence', 'low')).title()}.")
         self._paragraph(pdf, f"Product Purpose Confidence: {self._safe_text(getattr(prd_result, 'product_purpose_confidence', 'low')).title()}.")
@@ -71,23 +92,31 @@ class PDFExporter:
         pb = getattr(prd_result, "project_brief", None)
         self._section(pdf, "Project Intelligence Brief")
         self._section(pdf, "Project Goal")
-        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "project_goal", self._brief_section(pb, "goal")))
+        project_goal = CanonicalOutputGuard.sanitize_text(getattr(canonical, "product_summary", None) or self._brief_section(pb, "goal"), canonical)
+        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "project_goal", project_goal))
 
         self._section(pdf, "What")
-        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "what", self._brief_section(pb, "what", getattr(getattr(prd_result, "overview", None), "content", ""))))
+        what_text = CanonicalOutputGuard.sanitize_text(getattr(canonical, "what", None) or self._brief_section(pb, "what", getattr(getattr(prd_result, "overview", None), "content", "")), canonical)
+        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "what", what_text))
 
         self._section(pdf, "Why")
-        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "why", self._brief_section(pb, "why")))
+        why_text = CanonicalOutputGuard.sanitize_text(getattr(canonical, "why", None) or self._brief_section(pb, "why"), canonical)
+        self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "why", why_text))
 
         self._section(pdf, "Built Summary")
         self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "built_summary", self._built_summary(prd_result)))
-        if pb and pb.completed:
+        if canonical and canonical.completed:
+            self._render_two_col_table(pdf, "Completed Item", "Details", [(item.title, item.description) for item in canonical.completed])
+        elif pb and pb.completed:
             self._render_two_col_table(pdf, "Completed Item", "Details", [(item.title, item.description) for item in pb.completed])
 
-        if pb and pb.remaining:
+        if (canonical and canonical.remaining) or (pb and pb.remaining):
             self._section(pdf, "Remaining Summary")
             self._paragraph(pdf, self._narrative_value(prd_result, polished_text, "remaining_summary", self._remaining_summary(prd_result)))
-            self._render_two_col_table(pdf, "Remaining Item", "Details", [(item.title, item.description) for item in pb.remaining])
+            if canonical and canonical.remaining:
+                self._render_two_col_table(pdf, "Remaining Item", "Details", [(item.title, item.description) for item in canonical.remaining])
+            else:
+                self._render_two_col_table(pdf, "Remaining Item", "Details", [(item.title, item.description) for item in pb.remaining])
         
         self._section(pdf, "Architecture")
         self._paragraph(pdf, self._section_intro(polished_text, "architecture"))
@@ -143,6 +172,21 @@ class PDFExporter:
             self._section(pdf, "Polished LLM Notes")
             self._paragraph(pdf, "The requested PRD was polished by Gemini. However, the exact structural data layout above is retained for maximum deterministic safety.")
 
+        body_text = "\n".join(
+            [
+                executive_summary,
+                project_goal,
+                what_text,
+                why_text,
+                self._built_summary(prd_result),
+                self._remaining_summary(prd_result),
+                self._risk_summary(prd_result),
+            ]
+        )
+        self._assert_canonical_domain_safety(prd_result)
+        if canonical is not None:
+            CanonicalOutputGuard.assert_no_forbidden_terms(body_text, canonical)
+
         out = pdf.output(dest="S")
         if isinstance(out, bytes):
             return out
@@ -181,6 +225,10 @@ class PDFExporter:
         return getattr(section, "content", default) or default
 
     def _built_summary(self, prd_result) -> str:
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical and canonical.completed:
+            rows = [f"{item.title}: {item.description}" for item in canonical.completed[:6]]
+            return "Built components include: " + "; ".join(rows) + "."
         pb = getattr(prd_result, "project_brief", None)
         if pb and pb.completed:
             rows = [f"{item.title}: {item.description}" for item in pb.completed[:6]]
@@ -188,12 +236,18 @@ class PDFExporter:
         return "Insufficient evidence from codebase."
 
     def _remaining_summary(self, prd_result) -> str:
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical and canonical.remaining:
+            return "; ".join(f"{item.title}: {item.description}" for item in canonical.remaining[:6]) + "."
         pb = getattr(prd_result, "project_brief", None)
         if pb and pb.remaining:
             return safe_remaining_summary(pb.remaining)
         return "No significant missing components were detected."
 
     def _risk_items(self, prd_result):
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical and getattr(canonical, "issues", None):
+            return canonical.issues
         pb = getattr(prd_result, "project_brief", None)
         if pb and getattr(pb, "issues", None):
             return pb.issues
@@ -251,6 +305,7 @@ class PDFExporter:
         pdf.ln(3)
 
     def _render_tech_stack_table(self, pdf, snapshot):
+        canonical = getattr(snapshot, "prd_result", None)
         rows = [
             ("Languages", ", ".join(snapshot.language_names) or "No language evidence identified"),
             ("Frameworks", ", ".join(snapshot.framework_names) or "No framework evidence identified"),
@@ -281,7 +336,7 @@ class PDFExporter:
         for api in apis:
             rows.append((
                 self._safe_text(f"{getattr(api, 'method', '')} {getattr(api, 'path', '')}"),
-                self._safe_text(getattr(api, "source_file", None) or getattr(api, "framework", None) or "Unknown source"),
+                self._safe_text(getattr(api, "purpose", None) or getattr(api, "source_file", None) or getattr(api, "framework", None) or "Unknown source"),
             ))
         self._render_two_col_table(pdf, "Method | Path", "Source", rows)
 
@@ -290,7 +345,7 @@ class PDFExporter:
             rows = [
                 (
                     self._safe_text(getattr(risk, "severity", None)).title(),
-                    self._safe_text(f"{getattr(risk, 'title', '')} | {getattr(risk, 'description', '')} | {getattr(risk, 'recommendation', '')}"),
+                    self._safe_text(f"{getattr(risk, 'title', '')} | {getattr(risk, 'description', getattr(risk, 'title', ''))} | {getattr(risk, 'recommendation', '')}"),
                 )
                 for risk in risks
             ]

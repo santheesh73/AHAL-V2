@@ -7,6 +7,8 @@ import logging
 from typing import Optional
 
 from app.chat.answer_composer_v2 import AnswerComposerV2
+from app.chat.casual_composer import CasualChatComposer
+from app.chat.chat_router import ChatMessageRouter
 from app.chat.constants import INSUFFICIENT_EVIDENCE_MESSAGE
 from app.chat.context_pack_builder import ChatContextPackBuilder
 from app.chat.intent_classifier import ChatIntentClassifier
@@ -19,6 +21,7 @@ from app.chat.retrieval.project_purpose_extractor import ProjectPurposeExtractor
 from app.chat.utils import build_followups, filter_chat_evidence, sanitize_chat_answer, sanitize_chat_text
 from app.config import config
 from app.docs.prd_engine import PRDEngine
+from app.intelligence.canonical_presenter import CanonicalProjectPresenter
 from app.intelligence.consistency_validator import OutputConsistencyValidator
 from app.intelligence.product_identity import ProductIdentityResolver
 from app.llm_orchestration import LLMOrchestrator, OrchestrationRequest
@@ -46,9 +49,12 @@ class ChatEngine:
         self._validator = validator or AnswerValidator()
         self._answer_composer = answer_composer or AnswerComposerV2()
         self._orchestrator = orchestrator or LLMOrchestrator()
+        self._message_router = ChatMessageRouter()
+        self._casual_composer = CasualChatComposer()
         self._truth_validator = OutputConsistencyValidator()
         self._identity_resolver = ProductIdentityResolver()
         self._purpose_extractor = ProjectPurposeExtractor()
+        self._canonical_presenter = CanonicalProjectPresenter()
 
     def answer(
         self,
@@ -65,7 +71,29 @@ class ChatEngine:
         if not normalized_question:
             raise ValueError("Question must not be empty")
 
+        # ── Phase 10E.1: Natural chat routing ────────────────────
         history = chat_memory.get_history(session_id) if session_id and include_history else []
+        route = self._message_router.classify(normalized_question, history)
+
+        if route.route == "casual":
+            answer = self._casual_composer.compose(normalized_question, intent=route.intent)
+            self._store_in_memory(session_id, include_history, normalized_question, answer, "casual")
+            return answer
+
+        if route.route == "unsupported":
+            answer = self._casual_composer.compose_unsupported()
+            self._store_in_memory(session_id, include_history, normalized_question, answer, "unsupported")
+            return answer
+
+        if route.route == "clarification":
+            if not history:
+                answer = self._casual_composer.compose_clarification_fallback()
+                self._store_in_memory(session_id, include_history, normalized_question, answer, "casual")
+                return answer
+            # Has history — fall through to repo pipeline to resolve with context
+        # ── End Phase 10E.1 routing ──────────────────────────────
+
+        # history already fetched above in routing block
         intent = self._classify_with_memory(normalized_question, history)
         logger.info("Chat intent classified", extra={"session_id": session_id, "intent": intent.intent})
 
@@ -102,6 +130,13 @@ class ChatEngine:
                 )
             except Exception as exc:
                 logger.warning("Onboarding generation unavailable for chat context: %s", exc)
+        canonical = self._canonical_presenter.build(
+            session_id=session_id or getattr(scan_result, "session_id", "chat-session"),
+            scan_result=scan_result,
+            intelligence_result=intelligence_result,
+            graph_result=graph_result,
+            prd_result=prd_result,
+        )
 
         context_pack = self._context_pack_builder.build(
             session_id=session_id or getattr(scan_result, "session_id", "chat-session"),
@@ -115,11 +150,10 @@ class ChatEngine:
             chat_history=history,
             scan_result=scan_result,
             graph_result=graph_result,
+            canonical_intelligence=canonical,
         )
-        context_pack.project_identity["summary"] = sanitize_chat_text(
-            getattr(purpose, "summary", "") or context_pack.project_identity.get("summary") or "",
-        )
-        context_pack.project_identity["project_name"] = sanitize_chat_text(getattr(purpose, "title", "") or "")
+        context_pack.project_identity["summary"] = sanitize_chat_text(canonical.product_summary or getattr(purpose, "summary", "") or context_pack.project_identity.get("summary") or "")
+        context_pack.project_identity["project_name"] = sanitize_chat_text(canonical.project_name or getattr(purpose, "title", "") or "")
         for evidence in getattr(purpose, "evidence", [])[:3]:
             if evidence not in context_pack.selected_evidence:
                 context_pack.selected_evidence.append(evidence)
@@ -173,6 +207,10 @@ class ChatEngine:
         answer.suggested_followups = answer.suggested_followups or build_followups(intent.intent)
         answer = sanitize_chat_answer(answer)
 
+        if not answer.answer.strip() and not answer.sections:
+            answer.answer = "I’m here 👋 How can I help you? You can ask about the project or just chat."
+            answer.short_answer = "I’m here 👋 How can I help you?"
+
         if session_id and include_history:
             chat_memory.add_message(
                 session_id,
@@ -200,6 +238,41 @@ class ChatEngine:
             )
 
         return answer
+
+    def _store_in_memory(
+        self,
+        session_id: Optional[str],
+        include_history: bool,
+        question: str,
+        answer: ChatAnswer,
+        intent_label: str,
+    ) -> None:
+        """Store a casual / unsupported exchange in chat memory."""
+        if session_id and include_history:
+            chat_memory.add_message(
+                session_id,
+                ChatMessage(
+                    role="user",
+                    content=question,
+                    summary=question[:160],
+                    intent=intent_label,
+                    referenced_files=[],
+                    referenced_apis=[],
+                    referenced_modules=[],
+                ),
+            )
+            chat_memory.add_message(
+                session_id,
+                ChatMessage(
+                    role="assistant",
+                    content=answer.answer,
+                    summary=answer.short_answer[:160],
+                    intent=intent_label,
+                    referenced_files=[],
+                    referenced_apis=[],
+                    referenced_modules=[],
+                ),
+            )
 
     def _classify_with_memory(self, question: str, history: list[ChatMessage]) -> ChatIntentResult:
         intent = self._intent_classifier.classify(question)
@@ -259,17 +332,30 @@ class ChatEngine:
             ],
         }
         return (
-            "You are AHAL AI.\n"
+            "You are AHAL Conversational Intelligence Engine.\n"
+            "Your goal is to behave like ChatGPT: natural, intelligent, context-aware.\n"
+            "You are currently in REPOSITORY INTELLIGENCE MODE.\n"
             "Use only the allowed facts below.\n"
             "Return JSON with keys answer, sections, short_answer, suggested_followups, warnings.\n"
             "Each section must include title, content, bullets, evidence_ids.\n"
-            "Use uncertainty when evidence is weak.\n"
+            "Use uncertainty when evidence is weak. NEVER show JSON errors or backend terminology in the final text.\n"
             f"{json.dumps(to_jsonable(payload), ensure_ascii=True)[:12000]}"
         )
 
     def _parse_llm_output(self, text: str):
+        cleaned_text = text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+            if cleaned_text.endswith("```"):
+                cleaned_text = cleaned_text[:-3]
+        elif cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+            if cleaned_text.endswith("```"):
+                cleaned_text = cleaned_text[:-3]
+        cleaned_text = cleaned_text.strip()
+        
         try:
-            payload = json.loads(text)
+            payload = json.loads(cleaned_text)
         except Exception:
             cleaned = sanitize_chat_text(text, "", max_length=4000)
             if not cleaned:

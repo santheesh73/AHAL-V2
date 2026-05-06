@@ -80,10 +80,85 @@ class ProjectBriefGenerator:
 
         return False
 
-    def generate(self, scan_result, intelligence_result, graph_result, overview: PRDSection, risks: List[RiskItem], snapshot: PRDFactSnapshot | None = None, product_identity=None) -> ProjectBrief:
+    def generate(
+        self,
+        scan_result,
+        intelligence_result,
+        graph_result,
+        overview: PRDSection,
+        risks: List[RiskItem],
+        snapshot: PRDFactSnapshot | None = None,
+        product_identity=None,
+        canonical_intelligence=None,
+    ) -> ProjectBrief:
         warnings = []
         product_identity = product_identity or self.identity_resolver.resolve(scan_result=scan_result, intelligence_result=intelligence_result)
         snapshot = snapshot or build_fact_snapshot(scan_result=scan_result, intelligence_result=intelligence_result, product_identity=product_identity)
+
+        if canonical_intelligence is not None:
+            canonical_confidence = safe_str(getattr(getattr(canonical_intelligence, "confidence", None), "product_purpose", "medium"), "medium").lower()
+            goal_section = PRDSection(
+                title="Project Goal",
+                content=safe_str(getattr(canonical_intelligence, "product_summary", "")),
+                evidence=[],
+                confidence=canonical_confidence,
+            )
+            what_section = PRDSection(
+                title="What This Project Is",
+                content=safe_str(getattr(canonical_intelligence, "what", "")),
+                evidence=[],
+                confidence=canonical_confidence,
+            )
+            why_section = PRDSection(
+                title="Why This Project Exists",
+                content=safe_str(getattr(canonical_intelligence, "why", "")),
+                evidence=[],
+                confidence=canonical_confidence,
+            )
+            completed = [
+                ProjectStatusItem(
+                    title=safe_str(getattr(item, "title", ""), "Detected capability"),
+                    status="built",
+                    description=safe_str(getattr(item, "description", ""), "Capability details were not returned."),
+                    evidence=[],
+                    confidence=safe_str(getattr(item, "confidence", "medium"), "medium").lower(),
+                )
+                for item in safe_sequence(getattr(canonical_intelligence, "completed", []))
+            ]
+            remaining = [
+                ProjectStatusItem(
+                    title=safe_str(getattr(item, "title", ""), "Remaining work"),
+                    status="missing",
+                    description=safe_str(getattr(item, "description", ""), "Remaining work details were not returned."),
+                    evidence=[],
+                    confidence=safe_str(getattr(item, "confidence", "medium"), "medium").lower(),
+                )
+                for item in safe_sequence(getattr(canonical_intelligence, "remaining", []))
+            ]
+            issues = [
+                RiskItem(
+                    severity=safe_str(getattr(item, "severity", "medium"), "medium").lower(),
+                    title=safe_str(getattr(item, "title", ""), "Detected issue"),
+                    description=safe_str(getattr(item, "title", ""), "Detected issue"),
+                    evidence=[],
+                    recommendation=safe_str(getattr(item, "recommendation", ""), "Review this issue and confirm follow-up action."),
+                )
+                for item in safe_sequence(getattr(canonical_intelligence, "issues", []))
+            ]
+            next_steps = safe_next_steps(remaining, issues)
+            brief = ProjectBrief(
+                goal=goal_section,
+                what=what_section,
+                why=why_section,
+                completed=completed,
+                remaining=remaining,
+                issues=issues,
+                next_steps=next_steps,
+                confidence=canonical_confidence if canonical_confidence in {"high", "medium", "low"} else "medium",
+                warnings=[],
+            )
+            assert brief.what.content == canonical_intelligence.what
+            return brief
 
         def _safe_mapping_keys(value):
             if isinstance(value, dict):

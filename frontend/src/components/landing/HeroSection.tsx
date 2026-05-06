@@ -2,7 +2,6 @@ import { ArrowRight, FileCode2, GitBranchPlus, MessageSquareQuote, Sparkles, Tes
 import { Link } from "react-router-dom"
 import { motion } from "framer-motion"
 import { Button } from "../ui/Button"
-import { DemoFlowButton } from "./DemoFlowButton"
 import { GlassCard } from "../ui/GlassCard"
 import { MagneticButton } from "../ui/MagneticButton"
 import { ScrollReveal } from "../ui/ScrollReveal"
@@ -38,11 +37,8 @@ export function HeroSection() {
           <div className="flex flex-col gap-4 sm:flex-row">
             <MagneticButton>
               <Link to="/analyze">
-                <Button size="lg" icon={<ArrowRight className="h-4 w-4" />}>Analyze Project</Button>
+                <Button size="lg" icon={<ArrowRight className="h-4 w-4" />}>Start Analyzing</Button>
               </Link>
-            </MagneticButton>
-            <MagneticButton>
-              <DemoFlowButton>View Demo Dashboard</DemoFlowButton>
             </MagneticButton>
           </div>
         </ScrollReveal>

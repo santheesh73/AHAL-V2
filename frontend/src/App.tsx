@@ -25,8 +25,11 @@ function AnimatedRoutes() {
         <Routes location={location}>
           <Route path="/" element={<LandingPage />} />
           <Route path="/analyze" element={<AnalyzePage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/dashboard/:sessionId" element={<DashboardPage />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:sessionId" element={<ChatPage />} />
+          <Route path="/downloads" element={<DownloadsPage />} />
           <Route path="/downloads/:sessionId" element={<DownloadsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

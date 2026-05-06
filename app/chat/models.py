@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.intelligence.presentation_models import CanonicalProjectIntelligence
 from app.utils.evidence_types import normalize_evidence_source_type
 
 ConfidenceLevel = Literal["high", "medium", "low"]
@@ -34,6 +35,7 @@ ChatIntentName = Literal[
     "how_to_modify",
     "debugging_help",
     "general_repo_question",
+    "casual",
     "unsupported",
 ]
 
@@ -108,6 +110,7 @@ class ChatContextPack(BaseModel):
     confidence: ConfidenceLevel = "low"
     evidence_map: dict[str, EvidenceReference] = Field(default_factory=dict)
     max_context_chars: int = 0
+    canonical_intelligence: CanonicalProjectIntelligence | None = None
 
 
 class RetrievedContext(BaseModel):

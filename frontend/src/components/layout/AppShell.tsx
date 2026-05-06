@@ -14,7 +14,7 @@ type AppShellProps = {
 export function AppShell({ title, subtitle, children, sessionId, demoMode, headerMeta }: AppShellProps) {
   return (
     <div className="relative min-h-screen text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
+      <div className="flex min-h-screen w-full">
         <Sidebar sessionId={sessionId} />
         <div className="flex min-h-screen flex-1 flex-col">
           <Topbar title={title} subtitle={subtitle} sessionId={sessionId} demoMode={demoMode} headerMeta={headerMeta} />

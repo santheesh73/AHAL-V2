@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link, Navigate, useParams } from "react-router-dom"
+import { Link, useParams } from "react-router-dom"
 import {
   createRepoIndex,
   getIntelligence,
@@ -12,6 +12,7 @@ import {
   runDeltaScan,
 } from "../lib/ahal-api"
 import { toFriendlyError } from "../lib/errors"
+import { demoSessionId } from "../lib/mock-data"
 import { safeText } from "../lib/presentation"
 import { getToken } from "../lib/session-store"
 import type { IntelligenceData, OnboardingReport, PrdDiffResult, StatusResponse, TestGapReport, TimelineItem } from "../lib/types"
@@ -43,11 +44,12 @@ function getIndexStorageKey(sessionId: string) {
 
 export function DashboardPage() {
   const { sessionId } = useParams()
-  const resolvedSessionId = sessionId ?? ""
+  const resolvedSessionId = sessionId ?? demoSessionId
+  const usingDemoSession = !sessionId || sessionId === demoSessionId
   const [intelligence, setIntelligence] = useState<IntelligenceData | null>(null)
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [status, setStatus] = useState<StatusResponse | null>(null)
-  const [demoMode, setDemoMode] = useState(!isBackendConfigured())
+  const [demoMode, setDemoMode] = useState(usingDemoSession || !isBackendConfigured())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [testGaps, setTestGaps] = useState<TestGapReport | null>(null)
@@ -64,10 +66,6 @@ export function DashboardPage() {
   const [actionMessage, setActionMessage] = useState("")
 
   useEffect(() => {
-    if (!resolvedSessionId) {
-      return
-    }
-
     let active = true
     let attempts = 0
     let timeoutId: number | undefined
@@ -138,7 +136,7 @@ export function DashboardPage() {
       }
     }
 
-    if (!isBackendConfigured()) {
+    if (usingDemoSession || !isBackendConfigured()) {
       void finalizeSession()
     } else {
       void poll()
@@ -150,11 +148,7 @@ export function DashboardPage() {
         window.clearTimeout(timeoutId)
       }
     }
-  }, [resolvedSessionId])
-
-  if (!resolvedSessionId) {
-    return <Navigate to="/analyze" replace />
-  }
+  }, [resolvedSessionId, usingDemoSession])
 
   async function loadTestGaps() {
     setTestGapsLoading(true)

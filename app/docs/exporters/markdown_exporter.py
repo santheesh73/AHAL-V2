@@ -1,43 +1,64 @@
 from app.docs.models import PRDResult
 from app.docs.utils.evidence_sanitizer import sanitize_text
 from app.intelligence.consistency_validator import OutputConsistencyValidator
+from app.intelligence.output_guard import CanonicalOutputGuard
 
 class MarkdownExporter:
     def __init__(self):
         self.validator = OutputConsistencyValidator()
 
+    def _assert_canonical_domain_safety(self, prd_result: PRDResult) -> None:
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical is None:
+            return
+        checked_values = [
+            getattr(canonical, "product_summary", ""),
+            getattr(canonical, "what", ""),
+            getattr(canonical, "why", ""),
+            getattr(getattr(getattr(prd_result, "project_brief", None), "what", None), "content", ""),
+            getattr(getattr(prd_result, "overview", None), "content", ""),
+        ]
+        for value in checked_values:
+            CanonicalOutputGuard.assert_no_forbidden_terms(str(value or ""), canonical)
+
     def export(self, prd_result: PRDResult) -> str:
         prd_result = self.validator.validate_export_prd(prd_result)
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        self._assert_canonical_domain_safety(prd_result)
         lines = []
         lines.append("# Project Requirement Document\n")
         
         # 1. Project Overview
-        lines.append(self._format_section("1. Project Overview", prd_result.overview))
+        if canonical:
+            lines.append(f"## 1. Project Overview\n\n{sanitize_text(CanonicalOutputGuard.sanitize_text(canonical.product_summary, canonical))}\n")
+        else:
+            lines.append(self._format_section("1. Project Overview", prd_result.overview))
         
         # 1.5 Project Intelligence Brief
         if getattr(prd_result, "project_brief", None):
             pb = prd_result.project_brief
             lines.append("## Project Intelligence Brief\n")
-            lines.append(f"### Project Goal\n{sanitize_text(pb.goal.content)}\n")
-            lines.append(f"### What This Project Is\n{sanitize_text(pb.what.content)}\n")
-            lines.append(f"### Why This Project Exists\n{sanitize_text(pb.why.content)}\n")
+            lines.append(f"### Project Goal\n{sanitize_text(CanonicalOutputGuard.sanitize_text(getattr(canonical, 'product_summary', pb.goal.content), canonical))}\n")
+            lines.append(f"### What This Project Is\n{sanitize_text(CanonicalOutputGuard.sanitize_text(getattr(canonical, 'what', pb.what.content), canonical))}\n")
+            lines.append(f"### Why This Project Exists\n{sanitize_text(CanonicalOutputGuard.sanitize_text(getattr(canonical, 'why', pb.why.content), canonical))}\n")
             
             lines.append("### What Is Already Built\n")
-            for item in pb.completed:
+            for item in (getattr(canonical, "completed", None) or pb.completed):
                 lines.append(f"- **{item.title}**: {item.description}")
             lines.append("")
                 
             lines.append("### What Is Remaining\n")
-            for item in pb.remaining:
+            for item in (getattr(canonical, "remaining", None) or pb.remaining):
                 lines.append(f"- **{item.title}**: {item.description}")
             lines.append("")
             
             lines.append("### Current Issues\n")
-            if not pb.issues:
+            issues = getattr(canonical, "issues", None) or pb.issues
+            if not issues:
                 lines.append("No critical issues detected.\n")
             else:
-                for issue in pb.issues:
-                    lines.append(f"- **{issue.title}** ({issue.severity}): {issue.description}")
+                for issue in issues:
+                    lines.append(f"- **{issue.title}** ({issue.severity}): {getattr(issue, 'description', issue.title)}")
             lines.append("")
                     
             lines.append("### Recommended Next Steps\n")
@@ -125,7 +146,11 @@ class MarkdownExporter:
                 lines.append(f"  - {w}")
         lines.append("")
         
-        return "\n".join(lines)
+        markdown = "\n".join(lines)
+        self._assert_canonical_domain_safety(prd_result)
+        if canonical is not None:
+            CanonicalOutputGuard.assert_no_forbidden_terms(markdown, canonical)
+        return markdown
 
     def _format_section(self, title: str, section) -> str:
         lines = []

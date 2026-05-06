@@ -97,12 +97,8 @@ class CodeAnalyzer:
 
         if re.search(r"except\s*:\s", code):
             issues.append("Potential issue: broad exception handling may hide important failures.")
-        if re.search(r"print\s*\(", code) and "logging" not in code:
-            improvements.append("Replace ad-hoc print statements with structured logging for production workflows.")
         if "TODO" in code or "FIXME" in code:
             issues.append("Potential issue: unfinished TODO or FIXME markers are present in the code.")
-        if functions and not re.search(r"\bpytest\b|\bunittest\b", code) and len(functions) >= 3:
-            improvements.append("Add automated tests for the detected functions and edge cases.")
 
         summary = self._build_summary(
             language="Python",
@@ -161,10 +157,6 @@ class CodeAnalyzer:
         improvements: list[str] = []
         if "TODO" in code or "FIXME" in code:
             issues.append("Potential issue: unfinished TODO or FIXME markers are present in the code.")
-        if re.search(r"console\.log\s*\(", code):
-            improvements.append("Replace console logging with structured logging where operational visibility matters.")
-        if len(functions) >= 3:
-            improvements.append("Add targeted tests for the detected public functions or handlers.")
 
         evidence = [
             CodeEvidence(source_id=f"function:{name}", reason=f"Detected function `{name}`.")
@@ -211,7 +203,7 @@ class CodeAnalyzer:
             summary=summary,
             imports=clean_list(imports, max_items=20),
             issues=clean_list(issues),
-            suggested_improvements=["Add clearer structure, naming, and tests before relying on this snippet in production workflows."] if lines else [],
+            suggested_improvements=[],
             evidence=[CodeEvidence(source_id="snippet", reason="Analyzed the submitted code snippet directly.")],
             confidence="low" if not lines else "medium",
             warnings=clean_list(warnings or []),

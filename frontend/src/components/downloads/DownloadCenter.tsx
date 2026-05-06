@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Download, FileJson2, FileText, FileType2, LoaderCircle, ShieldCheck } from "lucide-react"
 import { downloadPrd, getHealth, getIntelligence, getStatus, isBackendConfigured } from "../../lib/ahal-api"
 import { toFriendlyError } from "../../lib/errors"
+import { demoSessionId } from "../../lib/mock-data"
 import { normalizeDownloadError } from "../../lib/trust-adapter"
 import type { IntelligenceData, StatusResponse } from "../../lib/types"
 import { downloadBlob } from "../../lib/utils"
@@ -45,6 +46,7 @@ const cards = [
 ]
 
 export function DownloadCenter({ sessionId }: { sessionId: string }) {
+  const usingDemoSession = sessionId === demoSessionId
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [intelligence, setIntelligence] = useState<IntelligenceData | null>(null)
   const [healthStatus, setHealthStatus] = useState("Checking backend health...")
@@ -68,7 +70,7 @@ export function DownloadCenter({ sessionId }: { sessionId: string }) {
         }
 
         setStatus(statusResult.data)
-        setHealthStatus(healthResult.demoMode ? "Demo backend" : healthResult.data.ok ? "Backend healthy" : "Backend responded")
+        setHealthStatus(usingDemoSession || healthResult.demoMode ? "Demo backend" : healthResult.data.ok ? "Backend healthy" : "Backend responded")
 
         if (String(statusResult.data.status).toLowerCase() === "completed") {
           const intelligenceResult = await getIntelligence(sessionId)
@@ -93,7 +95,7 @@ export function DownloadCenter({ sessionId }: { sessionId: string }) {
     return () => {
       active = false
     }
-  }, [sessionId])
+  }, [sessionId, usingDemoSession])
 
   const reportsReady = !loadingMeta && (!status || String(status.status).toLowerCase() === "completed")
 
@@ -189,8 +191,8 @@ export function DownloadCenter({ sessionId }: { sessionId: string }) {
         })}
       </div>
 
-      {!isBackendConfigured() ? (
-        <p className="text-sm text-slate-500">Demo mode is active because no backend URL is configured. Mock exports are only used in that case.</p>
+      {usingDemoSession || !isBackendConfigured() ? (
+        <p className="text-sm text-slate-500">Demo mode is active for this view, so export actions use the bundled mock report set.</p>
       ) : null}
     </div>
   )

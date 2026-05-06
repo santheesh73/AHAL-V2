@@ -12,24 +12,38 @@ class OverviewGenerator:
         self.identity_resolver = ProductIdentityResolver()
         self.validator = OutputConsistencyValidator()
 
-    def generate(self, scan_result, intelligence_result) -> PRDSection:
+    def generate(self, scan_result, intelligence_result, canonical_intelligence=None) -> PRDSection:
         warnings = []
-
-        try:
-            purpose = self.extractor.extract(getattr(scan_result, "contents", {}), intelligence_result)
-        except Exception:
-            warnings.append("Overview extraction encountered invalid evidence and fell back to deterministic synthesis.")
-            purpose = self._fallback_purpose(scan_result, intelligence_result)
-        
-        if purpose.warnings:
-            warnings.extend(purpose.warnings)
-
-        is_healthcare = (purpose.domain or "") in {"medical/healthcare assistance", "healthcare"}
-        if purpose.summary and is_healthcare and (purpose.confidence or "low") in ("high", "medium"):
-            content = purpose.summary
+        if canonical_intelligence is not None:
+            content = clean_sentence(getattr(canonical_intelligence, "product_summary", "") or "No overview available due to insufficient evidence.")
+            confidence = str(getattr(getattr(canonical_intelligence, "confidence", None), "product_purpose", "medium") or "medium").lower()
+            evidence = [
+                DocEvidence(
+                    source_type=str(getattr(item, "source_type", "file") or "file"),
+                    source_id=str(getattr(item, "id", "") or getattr(item, "label", "canonical-evidence")),
+                    file=str(getattr(item, "label", "") or "") or None,
+                    reason=str(getattr(item, "reason", "Canonical project evidence.")),
+                    confidence=str(getattr(item, "confidence", "medium") or "medium").lower(),
+                )
+                for item in getattr(canonical_intelligence, "evidence", []) or []
+            ]
         else:
-            content = clean_sentence(purpose.summary) if purpose.summary else "No overview available due to insufficient evidence."
-        evidence = purpose.evidence or []
+            try:
+                purpose = self.extractor.extract(getattr(scan_result, "contents", {}), intelligence_result)
+            except Exception:
+                warnings.append("Overview extraction encountered invalid evidence and fell back to deterministic synthesis.")
+                purpose = self._fallback_purpose(scan_result, intelligence_result)
+            
+            if purpose.warnings:
+                warnings.extend(purpose.warnings)
+
+            is_healthcare = (purpose.domain or "") in {"medical/healthcare assistance", "healthcare"}
+            if purpose.summary and is_healthcare and (purpose.confidence or "low") in ("high", "medium"):
+                content = purpose.summary
+            else:
+                content = clean_sentence(purpose.summary) if purpose.summary else "No overview available due to insufficient evidence."
+            evidence = purpose.evidence or []
+            confidence = purpose.confidence or "low"
         
         if not evidence and intelligence_result:
             frameworks = getattr(intelligence_result, "frameworks", [])
@@ -57,7 +71,6 @@ class OverviewGenerator:
                         confidence="medium",
                     )
                 )
-        confidence = purpose.confidence or "low"
         if not content or content.strip().lower() == "generation failed.":
             content = self._fallback_summary(scan_result, intelligence_result)
             if confidence == "low" and sanitized_ev:

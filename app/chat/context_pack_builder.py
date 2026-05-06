@@ -26,17 +26,23 @@ class ChatContextPackBuilder:
         chat_history=None,
         scan_result=None,
         graph_result=None,
+        canonical_intelligence=None,
     ) -> ChatContextPack:
         max_items = max(1, int(config.scanner.chat_max_context_items))
         max_chars = max(1000, int(config.scanner.chat_max_context_chars))
         normalized_intent = intent if isinstance(intent, ChatIntentResult) else ChatIntentResult.model_validate(intent)
         warnings: list[str] = []
 
+        canonical = canonical_intelligence or getattr(prd_result, "canonical_intelligence", None)
         project_identity = {
-            "project_type": getattr(intelligence_result, "project_type", "unknown"),
-            "frameworks": [getattr(item, "name", str(item)) for item in getattr(intelligence_result, "frameworks", [])[:6]],
-            "databases": [getattr(item, "name", str(item)) for item in getattr(intelligence_result, "databases", [])[:6]],
-            "summary": sanitize_chat_text(getattr(prd_result, "executive_summary", None) or getattr(prd_result, "summary", None) or ""),
+            "project_type": getattr(canonical, "project_type", getattr(intelligence_result, "project_type", "unknown")),
+            "frameworks": list(getattr(getattr(canonical, "tech_stack", None), "frameworks", [])) or [getattr(item, "name", str(item)) for item in getattr(intelligence_result, "frameworks", [])[:6]],
+            "databases": list(getattr(getattr(canonical, "tech_stack", None), "databases", [])) or [getattr(item, "name", str(item)) for item in getattr(intelligence_result, "databases", [])[:6]],
+            "summary": sanitize_chat_text(getattr(canonical, "product_summary", None) or getattr(prd_result, "executive_summary", None) or getattr(prd_result, "summary", None) or ""),
+            "what": sanitize_chat_text(getattr(canonical, "what", None) or ""),
+            "why": sanitize_chat_text(getattr(canonical, "why", None) or ""),
+            "domain": sanitize_chat_text(getattr(canonical, "product_domain", None) or ""),
+            "project_name": sanitize_chat_text(getattr(canonical, "project_name", None) or ""),
         }
         architecture_summary = {
             "type": getattr(getattr(intelligence_result, "architecture", None), "type", "unknown"),
@@ -44,10 +50,10 @@ class ChatContextPackBuilder:
             "entry_points": [sanitize_chat_path(getattr(item, "file", str(item))) for item in getattr(intelligence_result, "entry_points", [])[:5]],
         }
 
-        relevant_apis = self._select_apis(intelligence_result, normalized_intent, max_items)
+        relevant_apis = self._select_apis(canonical, intelligence_result, normalized_intent, max_items)
         relevant_modules = self._select_modules(intelligence_result, normalized_intent, max_items)
-        relevant_workflow = self._select_workflow(intelligence_result, normalized_intent)
-        relevant_risks = self._select_risks(prd_result, intelligence_result, normalized_intent)
+        relevant_workflow = self._select_workflow(canonical, intelligence_result, normalized_intent)
+        relevant_risks = self._select_risks(canonical, prd_result, intelligence_result, normalized_intent)
         relevant_test_gaps = self._select_test_gaps(test_gap_result, normalized_intent)
         relevant_onboarding_steps = self._select_onboarding(onboarding_report, normalized_intent)
         selected_evidence = self._select_evidence(
@@ -96,23 +102,25 @@ class ChatContextPackBuilder:
             confidence=confidence,
             evidence_map=evidence_map,
             max_context_chars=max_chars,
+            canonical_intelligence=canonical,
         )
 
-    def _select_apis(self, intelligence_result, intent: ChatIntentResult, max_items: int) -> list[dict[str, Any]]:
+    def _select_apis(self, canonical_intelligence, intelligence_result, intent: ChatIntentResult, max_items: int) -> list[dict[str, Any]]:
         selected = []
         target_path = (intent.entities.api_path or "").lower()
-        for endpoint in getattr(intelligence_result, "api_endpoints", []):
+        source_items = list(getattr(canonical_intelligence, "api_surface", []) or []) or list(getattr(intelligence_result, "api_endpoints", []) or [])
+        for endpoint in source_items:
             method = str(getattr(endpoint, "method", "GET")).upper()
             path = str(getattr(endpoint, "path", "/"))
-            file = sanitize_chat_path(getattr(endpoint, "file", ""))
+            file = sanitize_chat_path(getattr(endpoint, "source", getattr(endpoint, "file", "")))
             if target_path and target_path not in path.lower():
                 continue
             selected.append({
                 "method": method,
                 "path": path,
-                "handler": sanitize_chat_text(getattr(endpoint, "handler", "")),
+                "handler": sanitize_chat_text(getattr(endpoint, "handler", getattr(endpoint, "purpose", ""))),
                 "file": file,
-                "framework": sanitize_chat_text(getattr(endpoint, "framework", "")),
+                "framework": sanitize_chat_text(getattr(endpoint, "framework", getattr(endpoint, "source", ""))),
                 "confidence": getattr(endpoint, "confidence", "medium"),
                 "evidence": list(getattr(endpoint, "evidence", []) or []),
             })
@@ -128,7 +136,7 @@ class ChatContextPackBuilder:
                 "confidence": getattr(endpoint, "confidence", "medium"),
                 "evidence": list(getattr(endpoint, "evidence", []) or []),
             }
-            for endpoint in getattr(intelligence_result, "api_endpoints", [])[:max_items]
+            for endpoint in source_items[:max_items]
         ]
 
     def _select_modules(self, intelligence_result, intent: ChatIntentResult, max_items: int) -> list[dict[str, Any]]:
@@ -163,21 +171,35 @@ class ChatContextPackBuilder:
             for module in getattr(intelligence_result, "modules", [])[:max_items]
         ]
 
-    def _select_workflow(self, intelligence_result, intent: ChatIntentResult) -> list[dict[str, Any]]:
+    def _select_workflow(self, canonical_intelligence, intelligence_result, intent: ChatIntentResult) -> list[dict[str, Any]]:
         steps = []
-        for step in getattr(getattr(intelligence_result, "workflow", None), "steps", [])[:6]:
+        canonical_steps = list(getattr(canonical_intelligence, "workflow", []) or [])
+        source_steps = canonical_steps if canonical_steps else list(getattr(getattr(intelligence_result, "workflow", None), "steps", []) or [])
+        for step in source_steps[:6]:
             steps.append({
-                "order": getattr(step, "order", 0),
-                "action": sanitize_chat_text(getattr(step, "action", "Workflow step")),
-                "source": sanitize_chat_path(getattr(step, "source", "")),
+                "order": getattr(step, "step", getattr(step, "order", 0)),
+                "action": sanitize_chat_text(getattr(step, "description", getattr(step, "action", "Workflow step"))),
+                "source": sanitize_chat_path(getattr(step, "title", getattr(step, "source", ""))),
                 "target": sanitize_chat_path(getattr(step, "target", "")),
                 "confidence": getattr(step, "confidence", "medium"),
                 "evidence": list(getattr(step, "evidence", []) or []),
             })
         return steps
 
-    def _select_risks(self, prd_result, intelligence_result, intent: ChatIntentResult) -> list[dict[str, Any]]:
+    def _select_risks(self, canonical_intelligence, prd_result, intelligence_result, intent: ChatIntentResult) -> list[dict[str, Any]]:
         items = []
+        for risk in list(getattr(canonical_intelligence, "issues", []) or [])[:6]:
+            title = sanitize_chat_text(getattr(risk, "title", ""))
+            if not title:
+                continue
+            items.append({
+                "title": title,
+                "severity": sanitize_chat_text(getattr(risk, "severity", "medium")),
+                "recommendation": sanitize_chat_text(getattr(risk, "recommendation", "")),
+                "evidence": [],
+            })
+        if items:
+            return items
         source = getattr(prd_result, "issues", None) or []
         for risk in source[:6]:
             title = sanitize_chat_text(getattr(risk, "title", None) or risk.get("title") if isinstance(risk, dict) else "")

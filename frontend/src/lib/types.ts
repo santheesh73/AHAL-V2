@@ -48,6 +48,40 @@ export interface IntelligenceResponse {
   evidence?: Array<Record<string, unknown>>
   warnings?: string[]
   confidence?: "high" | "medium" | "low" | string
+  canonical_intelligence?: CanonicalIntelligenceResponse
+}
+
+export interface CanonicalIntelligenceResponse {
+  session_id?: string
+  project_name?: string
+  project_type?: string
+  product_summary?: string
+  product_domain?: string
+  architecture_summary?: string
+  what?: string
+  why?: string
+  completed?: Array<{ title?: string; description?: string; confidence?: string }>
+  remaining?: Array<{ title?: string; description?: string; confidence?: string }>
+  issues?: Array<{ severity?: string; title?: string; recommendation?: string }>
+  tech_stack?: {
+    languages?: string[]
+    frameworks?: string[]
+    databases?: string[]
+    tools?: string[]
+  }
+  api_surface?: Array<{ method?: string; path?: string; purpose?: string; source?: string }>
+  workflow?: Array<{ step?: number; title?: string; description?: string }>
+  evidence?: Array<{ id?: string; label?: string; reason?: string; source_type?: string; confidence?: string }>
+  warnings?: string[]
+  confidence?: {
+    architecture?: string
+    product_purpose?: string
+    overall?: string
+  }
+  data_quality?: {
+    normalized?: boolean
+    notes?: string[]
+  }
 }
 
 export interface TimelineEvent {

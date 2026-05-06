@@ -70,6 +70,24 @@ function toText(value: unknown, fallback = "") {
   return safeText(value, fallback)
 }
 
+function applyCanonicalDeveloperGuard(text: string, canonical?: IntelligenceResponse["canonical_intelligence"]): string {
+  const value = toText(text)
+  if (!canonical) {
+    return value
+  }
+  const canonicalSummary = toText(canonical.product_summary)
+  const canonicalWhat = toText(canonical.what)
+  const joined = `${canonicalSummary} ${canonicalWhat}`.toLowerCase()
+  const isDeveloperIdentity = joined.includes("code intelligence") || joined.includes("developer tool")
+  if (!isDeveloperIdentity) {
+    return value
+  }
+  if (/content management application/i.test(value)) {
+    return canonicalWhat || canonicalSummary || value
+  }
+  return value
+}
+
 function normalizeProjectType(value: unknown): ProjectType {
   const normalized = toText(value).toLowerCase()
   if (normalized.includes("front")) {
@@ -115,6 +133,10 @@ function getExplicitDescription(raw: IntelligenceResponse): string {
 }
 
 function normalizeProductSummary(raw: IntelligenceResponse, explicitDescription: string): string {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.product_summary) {
+    return dedupeParagraphText(applyCanonicalDeveloperGuard(toText(canonical.product_summary), canonical))
+  }
   const lower = explicitDescription.toLowerCase()
   if (
     explicitDescription &&
@@ -139,18 +161,26 @@ function normalizeProductSummary(raw: IntelligenceResponse, explicitDescription:
 }
 
 function normalizeWhat(raw: IntelligenceResponse, explicitDescription: string): string {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.what) {
+    return applyCanonicalDeveloperGuard(toText(canonical.what), canonical)
+  }
   if (explicitDescription) {
     return explicitDescription
   }
 
   const fallback = toText(raw.summary?.what, "The exact product behavior is only partially described by the available intelligence output.")
   if (/content management application/i.test(fallback)) {
-    return "This project appears to be a developer intelligence platform based on the available code and metadata."
+    return applyCanonicalDeveloperGuard("This project appears to be a developer intelligence platform based on the available code and metadata.", canonical)
   }
   return fallback
 }
 
 function normalizeWhy(raw: IntelligenceResponse): string {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.why) {
+    return applyCanonicalDeveloperGuard(toText(canonical.why), canonical)
+  }
   return toText(raw.summary?.why, "The business or user-facing reason is not fully specified in the analyzed evidence.")
 }
 
@@ -165,6 +195,15 @@ function collectEvidenceStrings(raw: IntelligenceResponse): string[] {
 }
 
 function normalizeTechStack(raw: IntelligenceResponse): NormalizedIntelligence["techStack"] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.tech_stack) {
+    return {
+      languages: dedupeStrings(toArray(canonical.tech_stack.languages).map((item) => toText(item)).filter(Boolean)),
+      frameworks: dedupeStrings(toArray(canonical.tech_stack.frameworks).map((item) => toText(item)).filter(Boolean)),
+      databases: dedupeStrings(toArray(canonical.tech_stack.databases).map((item) => toText(item)).filter(Boolean)),
+      tools: dedupeStrings(toArray(canonical.tech_stack.tools).map((item) => toText(item)).filter(Boolean)),
+    }
+  }
   const techStack = {
     languages: [] as string[],
     frameworks: [] as string[],
@@ -255,6 +294,18 @@ function apiPriority(path: string): number {
 }
 
 function normalizeApiSurface(raw: IntelligenceResponse): ApiSurfaceItem[] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.api_surface?.length) {
+    return toArray(canonical.api_surface).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        method: toText(record.method, "GET").toUpperCase(),
+        path: normalizeApiPath(toText(record.path, "/")),
+        purpose: toText(record.purpose, humanizeApiPurpose(toText(record.method, "GET"), toText(record.path, "/"))),
+        source: sanitizePath(toText(record.source, "Detected API surface")) || "Detected API surface",
+      }
+    })
+  }
   const items = new Map<string, ApiSurfaceItem>()
 
   for (const item of toArray(raw.technical?.api_surface)) {
@@ -297,6 +348,16 @@ function pushCompleted(result: BriefItem[], seen: Set<string>, title: string, de
 }
 
 function normalizeCompleted(raw: IntelligenceResponse, apiSurface: ApiSurfaceItem[], techStack: NormalizedIntelligence["techStack"]): BriefItem[] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.completed?.length) {
+    return toArray(canonical.completed).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        title: toText(record.title, "Detected capability"),
+        description: toText(record.description, "Capability details were not returned."),
+      }
+    })
+  }
   const result: BriefItem[] = []
   const seen = new Set<string>()
 
@@ -342,6 +403,16 @@ function normalizeCompleted(raw: IntelligenceResponse, apiSurface: ApiSurfaceIte
 }
 
 function normalizeRemaining(raw: IntelligenceResponse): BriefItem[] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.remaining?.length) {
+    return toArray(canonical.remaining).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        title: toText(record.title, "Remaining work"),
+        description: toText(record.description ?? record.title, "Remaining work"),
+      }
+    })
+  }
   const seen = new Set<string>()
   const result: BriefItem[] = []
 
@@ -369,6 +440,17 @@ function normalizeRemaining(raw: IntelligenceResponse): BriefItem[] {
 }
 
 function normalizeIssues(raw: IntelligenceResponse): NormalizedIntelligence["issues"] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.issues?.length) {
+    return toArray(canonical.issues).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        severity: normalizeConfidence(record.severity),
+        title: toText(record.title, "Detected issue"),
+        recommendation: toText(record.recommendation, "Review this returned issue and confirm whether follow-up action is needed."),
+      }
+    })
+  }
   const result: NormalizedIntelligence["issues"] = []
   const seen = new Set<string>()
 
@@ -410,6 +492,16 @@ function normalizeIssues(raw: IntelligenceResponse): NormalizedIntelligence["iss
 }
 
 function normalizeWorkflow(raw: IntelligenceResponse, projectType: ProjectType): WorkflowStep[] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.workflow?.length) {
+    return toArray(canonical.workflow).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        title: toText(record.title, "Workflow step"),
+        description: toText(record.description, "Workflow step returned by backend."),
+      }
+    })
+  }
   const joined = JSON.stringify(toArray(raw.technical?.workflow)).toLowerCase()
   const impossible = joined.includes("types/index.ts") || (joined.includes("frontend") && joined.includes("fastapi") && joined.includes("initializes"))
 
@@ -461,6 +553,16 @@ function preferredEvidenceOrder(label: string): number {
 }
 
 function normalizeEvidence(raw: IntelligenceResponse): NormalizedIntelligence["evidence"] {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.evidence?.length) {
+    return toArray(canonical.evidence).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        label: sanitizePath(toText(record.label)) || toText(record.label),
+        detail: sanitizeEvidenceDetail(record.reason),
+      }
+    }).filter((item) => item.label)
+  }
   const result: NormalizedIntelligence["evidence"] = []
   const seen = new Set<string>()
 
@@ -512,6 +614,13 @@ function normalizeWarnings(rawWarnings: unknown): string[] {
 }
 
 function buildDataQuality(raw: IntelligenceResponse, normalized: Omit<NormalizedIntelligence, "dataQuality">) {
+  const canonical = raw.canonical_intelligence
+  if (canonical?.data_quality) {
+    return {
+      normalized: Boolean(canonical.data_quality.normalized),
+      notes: dedupeStrings(toArray(canonical.data_quality.notes).map((item) => toText(item)).filter(Boolean)),
+    }
+  }
   const notes: string[] = []
   const rawApiCount = toArray(raw.technical?.api_surface).length
   const rawEvidenceCount = toArray(raw.evidence).length
@@ -542,16 +651,16 @@ function buildDataQuality(raw: IntelligenceResponse, normalized: Omit<Normalized
 export function normalizeIntelligence(raw: unknown): NormalizedIntelligence {
   const intelligence = (raw ?? {}) as IntelligenceResponse
   const explicitDescription = getExplicitDescription(intelligence)
-  const projectType = normalizeProjectType(intelligence.project_type ?? intelligence.architecture_style)
+  const projectType = normalizeProjectType(intelligence.canonical_intelligence?.project_type ?? intelligence.project_type ?? intelligence.architecture_style)
   const techStack = normalizeTechStack(intelligence)
   const apiSurface = normalizeApiSurface(intelligence)
   const normalizedBase: Omit<NormalizedIntelligence, "dataQuality"> = {
-    sessionId: toText(intelligence.session_id),
-    projectName: toText(intelligence.project_name, "Analyzed Project"),
+    sessionId: toText(intelligence.canonical_intelligence?.session_id ?? intelligence.session_id),
+    projectName: toText(intelligence.canonical_intelligence?.project_name ?? intelligence.project_name, "Analyzed Project"),
     projectSummary: normalizeProductSummary(intelligence, explicitDescription),
     projectType,
-    architectureConfidence: normalizeConfidence(intelligence.architecture_confidence ?? intelligence.confidence),
-    productPurposeConfidence: explicitDescription ? "High" : normalizeConfidence(intelligence.product_purpose_confidence ?? intelligence.confidence),
+    architectureConfidence: normalizeConfidence(intelligence.canonical_intelligence?.confidence?.architecture ?? intelligence.architecture_confidence ?? intelligence.confidence),
+    productPurposeConfidence: normalizeConfidence(intelligence.canonical_intelligence?.confidence?.product_purpose ?? (explicitDescription ? "High" : intelligence.product_purpose_confidence ?? intelligence.confidence)),
     what: normalizeWhat(intelligence, explicitDescription),
     why: normalizeWhy(intelligence),
     completed: normalizeCompleted(intelligence, apiSurface, techStack),

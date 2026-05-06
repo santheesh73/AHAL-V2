@@ -7,13 +7,19 @@ type ConnectionState = {
   label: string
   detail: string
   tone: string
+  visible: boolean
 }
 
 export function ConnectionBanner() {
   const [state, setState] = useState<ConnectionState>(() =>
     isBackendConfigured()
-      ? { label: "Checking Backend", detail: "Validating FastAPI connectivity...", tone: "border-white/10 bg-white/[0.04] text-slate-200" }
-      : { label: "Demo Mode", detail: "No backend URL is configured, so demo-safe fixtures are available.", tone: "border-violet-400/20 bg-violet-500/10 text-violet-200" },
+      ? { label: "", detail: "", tone: "", visible: false }
+      : {
+          label: "Demo Mode",
+          detail: "No backend URL is configured, so demo-safe fixtures are available.",
+          tone: "border-violet-400/20 bg-violet-500/10 text-violet-200",
+          visible: true,
+        },
   )
 
   useEffect(() => {
@@ -31,13 +37,14 @@ export function ConnectionBanner() {
         }
 
         setState({
-          label: result.demoMode ? "Demo Mode" : "Backend Connected",
+          label: result.demoMode ? "Demo Mode" : "",
           detail: result.demoMode
             ? "No backend URL is configured, so demo-safe fixtures are available."
-            : "FastAPI health check succeeded and the live backend is ready.",
+            : "",
           tone: result.demoMode
             ? "border-violet-400/20 bg-violet-500/10 text-violet-200"
-            : "border-emerald-400/20 bg-emerald-500/10 text-emerald-200",
+            : "",
+          visible: result.demoMode,
         })
       } catch {
         if (!active) {
@@ -48,6 +55,7 @@ export function ConnectionBanner() {
           label: "Backend Unreachable",
           detail: `Cannot reach AHAL backend at ${getBackendUrl()}. Start FastAPI with python -m app.main.`,
           tone: "border-rose-400/20 bg-rose-500/10 text-rose-200",
+          visible: true,
         })
       }
     }
@@ -57,6 +65,10 @@ export function ConnectionBanner() {
       active = false
     }
   }, [])
+
+  if (!state.visible) {
+    return null
+  }
 
   return (
     <div className="sticky top-0 z-40 px-4 pt-4 md:px-8">

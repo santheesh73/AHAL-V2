@@ -4,6 +4,7 @@ import {
   demoChatResponse,
   demoDiff,
   demoIntelligence,
+  demoSessionId,
   demoOnboarding,
   demoTestGaps,
   demoTimeline,
@@ -64,6 +65,10 @@ export class APIError extends Error {
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "")
+}
+
+function isDemoSession(sessionId?: string) {
+  return sessionId === demoSessionId
 }
 
 export function getBackendUrl() {
@@ -354,6 +359,17 @@ export async function analyzeRepo(repoUrl: string) {
 }
 
 export async function getStatus(sessionId: string) {
+  if (isDemoSession(sessionId)) {
+    return {
+      data: {
+        session_id: sessionId,
+        status: "completed",
+        progress: 100,
+        message: "Demo session is ready.",
+      },
+      demoMode: true,
+    }
+  }
   const demo: StatusResponse = {
     session_id: sessionId,
     status: "completed",
@@ -364,7 +380,7 @@ export async function getStatus(sessionId: string) {
 }
 
 export async function getTimeline(sessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return { data: demoTimeline, demoMode: true }
   }
   const result = await requestJson<TimelineResponse>(
@@ -376,7 +392,7 @@ export async function getTimeline(sessionId: string) {
 }
 
 export async function getIntelligence(sessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return { data: { ...demoIntelligence, sessionId }, demoMode: true }
   }
   const result = await requestJson<IntelligenceResponse>(
@@ -388,7 +404,7 @@ export async function getIntelligence(sessionId: string) {
 }
 
 export async function sendChat(sessionId: string, question: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return { data: demoChatResponse, demoMode: true }
   }
   const result = await requestJson<BackendChatResponse>(
@@ -433,11 +449,25 @@ export async function sendChatStream(
 }
 
 export async function downloadPrd(sessionId: string, format: "pdf" | "markdown" | "latex" | "json") {
+  if (isDemoSession(sessionId)) {
+    const demo = buildDemoDownload(format)
+    const shortSessionId = summarizeSessionForFilename(sessionId) || sessionId
+    const extensionMap = {
+      pdf: "pdf",
+      markdown: "md",
+      latex: "tex",
+      json: "json",
+    }
+    return {
+      ...demo,
+      filename: `ahal-report-${shortSessionId}.${extensionMap[format]}`,
+    }
+  }
   return requestBlob(`/analyze/prd/${sessionId}?format=${format}`, format, sessionId)
 }
 
 export async function getTestGaps(sessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return { data: demoTestGaps, demoMode: true }
   }
   const result = await requestJson<TestGapResponse>(
@@ -449,7 +479,7 @@ export async function getTestGaps(sessionId: string) {
 }
 
 export async function getOnboarding(sessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return { data: demoOnboarding, demoMode: true }
   }
   const result = await requestJson<OnboardingResponse>(
@@ -461,7 +491,7 @@ export async function getOnboarding(sessionId: string) {
 }
 
 export async function createRepoIndex(sessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(sessionId) || !isBackendConfigured()) {
     return {
       data: {
         index_id: "demo-index",
@@ -490,7 +520,7 @@ export async function createRepoIndex(sessionId: string) {
 }
 
 export async function runDeltaScan(indexId: string, payload: Record<string, unknown> = {}) {
-  if (!isBackendConfigured()) {
+  if (indexId === "demo-index" || !isBackendConfigured()) {
     return {
       data: {
         index_id: indexId,
@@ -523,7 +553,7 @@ export async function runDeltaScan(indexId: string, payload: Record<string, unkn
 }
 
 export async function getPrdDiff(baseSessionId: string, targetSessionId: string) {
-  if (!isBackendConfigured()) {
+  if (isDemoSession(baseSessionId) || isDemoSession(targetSessionId) || !isBackendConfigured()) {
     return { data: demoDiff, demoMode: true }
   }
   const result = await requestJson<PrdDiffResponse>(

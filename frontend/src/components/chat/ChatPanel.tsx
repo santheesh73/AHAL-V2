@@ -3,9 +3,9 @@ import { ArrowUpRight, ChevronDown, Copy, SendHorizontal, Sparkles } from "lucid
 import { useNavigate } from "react-router-dom"
 import { isBackendConfigured, sendChatStream } from "../../lib/ahal-api"
 import { toFriendlyError } from "../../lib/errors"
-import { demoChatResponse } from "../../lib/mock-data"
+import { demoChatResponse, demoSessionId } from "../../lib/mock-data"
 import { safeText, sanitizeChatMessage, uniqueEvidence } from "../../lib/presentation"
-import type { ChatAnswerSection, ChatMessage } from "../../lib/types"
+import type { ChatAnswerSection, ChatMessage, IntelligenceData } from "../../lib/types"
 import { formatDateTime } from "../../lib/utils"
 import { Button } from "../ui/Button"
 import { ConfidenceBadge } from "../ui/ConfidenceBadge"
@@ -29,11 +29,11 @@ function SectionBlock({ section, evidence }: { section: ChatAnswerSection; evide
   return (
     <div className="rounded-2xl border border-white/8 bg-slate-950/45 p-4">
       <h4 className="text-sm font-semibold text-white">{section.title}</h4>
-      {section.content ? <p className="mt-2 break-words text-sm leading-7 text-slate-300">{section.content}</p> : null}
+      {section.content ? <p className="mt-2 wrap-break-word text-sm leading-7 text-slate-300">{section.content}</p> : null}
       {section.bullets.length ? (
         <div className="mt-3 space-y-2">
           {section.bullets.map((bullet) => (
-            <p key={bullet} className="break-words text-sm text-slate-300">
+            <p key={bullet} className="wrap-break-word text-sm text-slate-300">
               {bullet}
             </p>
           ))}
@@ -42,7 +42,7 @@ function SectionBlock({ section, evidence }: { section: ChatAnswerSection; evide
       {evidence.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {evidence.map((label) => (
-            <span key={`${section.title}-${label}`} className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-slate-300">
+            <span key={`${section.title}-${label}`} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-slate-300">
               {label}
             </span>
           ))}
@@ -52,10 +52,46 @@ function SectionBlock({ section, evidence }: { section: ChatAnswerSection; evide
   )
 }
 
-export function ChatPanel({ sessionId }: { sessionId: string }) {
+function alignAssistantMessageWithCanonical(message: ChatMessage, intelligence?: IntelligenceData | null): ChatMessage {
+  if (!intelligence || message.role !== "assistant") {
+    return message
+  }
+
+  const summary = safeText(intelligence.projectSummary, "")
+  const what = safeText(intelligence.what, "")
+  const lowerSummary = summary.toLowerCase()
+  const lowerWhat = what.toLowerCase()
+  const isDeveloperIdentity = lowerSummary.includes("developer tool") || lowerSummary.includes("code intelligence") || lowerWhat.includes("developer tool") || lowerWhat.includes("code intelligence")
+  if (!isDeveloperIdentity) {
+    return message
+  }
+
+  const replaceLeak = (value?: string) => {
+    const text = safeText(value, "")
+    if (!/content management application/i.test(text)) {
+      return value ?? ""
+    }
+    return what || summary || text.replace(/content management application/gi, "developer intelligence platform")
+  }
+
+  return {
+    ...message,
+    content: replaceLeak(message.content),
+    shortAnswer: replaceLeak(message.shortAnswer),
+    sections: (message.sections ?? []).map((section) => ({
+      ...section,
+      content: replaceLeak(section.content),
+      bullets: section.bullets.map((bullet) => replaceLeak(bullet)),
+    })),
+  }
+}
+
+export function ChatPanel({ sessionId, intelligence }: { sessionId: string; intelligence?: IntelligenceData | null }) {
   const navigate = useNavigate()
   const messageCounter = useRef(0)
-  const [messages, setMessages] = useState<ChatMessage[]>(isBackendConfigured() ? [] : [demoChatResponse.message])
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    !isBackendConfigured() || sessionId === demoSessionId ? [demoChatResponse.message] : [],
+  )
   const [question, setQuestion] = useState("")
   const [loading, setLoading] = useState(false)
   const [suggestions, setSuggestions] = useState<string[]>(starterQuestions)
@@ -113,7 +149,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
       <GlassCard className="space-y-6 overflow-hidden">
         <div className="space-y-4">
           {!messages.length ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 text-sm text-slate-400">
+            <div className="rounded-3xl border border-white/10 bg-white/4 p-6 text-sm text-slate-400">
               <p className="font-medium text-white">Ask another question...</p>
               <p className="mt-2 leading-7">
                 Repo chat uses deterministic project intelligence, selected evidence, and conversation memory to answer repository questions more reliably than a generic assistant.
@@ -124,7 +160,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
                     key={item}
                     type="button"
                     onClick={() => ask(item)}
-                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-300/20 hover:bg-cyan-300/10 hover:text-white"
+                    className="rounded-full border border-white/10 bg-white/3 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-300/20 hover:bg-cyan-300/10 hover:text-white"
                   >
                     {item}
                   </button>
@@ -134,7 +170,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           ) : null}
 
           {messages.map((message) => {
-            const normalizedMessage = message.role === "assistant" ? sanitizeChatMessage(message) : message
+            const normalizedMessage = message.role === "assistant" ? sanitizeChatMessage(alignAssistantMessageWithCanonical(message, intelligence)) : message
             const evidenceLabels = uniqueEvidence(normalizedMessage.evidence ?? [], 6)
             const totalEvidenceCount = uniqueEvidence(normalizedMessage.evidence ?? [], 99).length
             const hiddenCount = Math.max(totalEvidenceCount - evidenceLabels.length, 0)
@@ -144,14 +180,14 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               <div
                 key={normalizedMessage.id}
                 className={normalizedMessage.role === "assistant"
-                  ? "rounded-[28px] border border-white/10 bg-white/[0.04] p-5"
+                  ? "rounded-[28px] border border-white/10 bg-white/4 p-5"
                   : "ml-auto max-w-2xl rounded-[28px] bg-cyan-400/12 p-5"}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <p className="font-medium text-white">{normalizedMessage.role === "assistant" ? "AHAL AI" : "You"}</p>
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-500">{formatDateTime(normalizedMessage.timestamp)}</p>
-                    {normalizedMessage.confidence ? <ConfidenceBadge value={normalizedMessage.confidence} /> : null}
+                    {normalizedMessage.confidence && (normalizedMessage.evidence?.length || normalizedMessage.sections?.length) ? <ConfidenceBadge value={normalizedMessage.confidence} /> : null}
                   </div>
                   {normalizedMessage.role === "assistant" ? (
                     <div className="flex flex-wrap gap-2">
@@ -167,7 +203,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
                   ) : null}
                 </div>
 
-                <p className="mt-4 break-words text-sm leading-7 text-slate-300">
+                <p className="mt-4 wrap-break-word text-sm leading-7 text-slate-300">
                   {safeText(normalizedMessage.shortAnswer || normalizedMessage.content, "No answer was returned.")}
                 </p>
 
@@ -179,8 +215,8 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
                   </div>
                 ) : null}
 
-                {normalizedMessage.role === "assistant" && !sections.length ? (
-                  <p className="mt-4 break-words text-sm leading-7 text-slate-300">{safeText(normalizedMessage.content, "No answer was returned.")}</p>
+                {normalizedMessage.role === "assistant" && !sections.length && normalizedMessage.content && normalizedMessage.content !== normalizedMessage.shortAnswer ? (
+                  <p className="mt-4 wrap-break-word text-sm leading-7 text-slate-300">{safeText(normalizedMessage.content, "No answer was returned.")}</p>
                 ) : null}
 
                 {normalizedMessage.role === "assistant" && evidenceLabels.length ? (
@@ -196,11 +232,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
                     {showEvidence ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {evidenceLabels.map((label) => (
-                          <span key={`${normalizedMessage.id}-${label}`} className="max-w-full rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs text-slate-300">
+                          <span key={`${normalizedMessage.id}-${label}`} className="max-w-full rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
                             {label}
                           </span>
                         ))}
-                        {hiddenCount > 0 ? <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-slate-400">+{hiddenCount} more</span> : null}
+                        {hiddenCount > 0 ? <span className="rounded-full border border-white/10 bg-white/3 px-3 py-1 text-xs text-slate-400">+{hiddenCount} more</span> : null}
                       </div>
                     ) : null}
                   </div>
@@ -247,11 +283,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           })}
 
           {loading ? (
-            <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="rounded-[28px] border border-white/10 bg-white/4 p-5">
               <div className="flex items-center gap-3 text-slate-300">
                 <Sparkles className="h-4 w-4 animate-pulse text-cyan-200" />
                 <span className="inline-flex items-center gap-1">
-                  <span>Building a grounded repo answer</span>
+                  <span>Thinking</span>
                   <span className="animate-pulse">...</span>
                 </span>
               </div>
@@ -294,7 +330,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               key={item}
               type="button"
               onClick={() => ask(item)}
-              className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 text-left text-sm text-slate-300 transition hover:border-cyan-300/20 hover:bg-cyan-300/10 hover:text-white"
+              className="w-full rounded-2xl border border-white/10 bg-white/3 px-4 py-4 text-left text-sm text-slate-300 transition hover:border-cyan-300/20 hover:bg-cyan-300/10 hover:text-white"
             >
               {item}
             </button>

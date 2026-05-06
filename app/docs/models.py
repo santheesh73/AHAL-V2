@@ -1,5 +1,6 @@
 from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
+from app.intelligence.presentation_models import CanonicalProjectIntelligence
 
 class DocEvidence(BaseModel):
     source_type: str
@@ -88,3 +89,4 @@ class PRDResult(BaseModel):
     confidence: Literal["high", "medium", "low"]
     evidence_count: int = 0
     warnings: List[str] = Field(default_factory=list)
+    canonical_intelligence: Optional[CanonicalProjectIntelligence] = None
