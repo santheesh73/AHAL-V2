@@ -32,12 +32,21 @@ logging.basicConfig(
 
 logger = logging.getLogger("ahal")
 
+summary = config.scanner.llm_startup_summary()
 logger.info(
-    "LLM config: enabled=%s key_present=%s model=%s",
-    config.scanner.llm_enabled,
-    bool(config.scanner.gemini_api_key),
-    config.scanner.llm_model,
+    "LLM config: provider=%s llm_enabled=%s chat_llm_enabled=%s docs_llm_enabled=%s validation_enabled=%s key_present=%s model=%s chat_model=%s docs_model=%s",
+    summary["provider"],
+    summary["llm_enabled"],
+    summary["chat_llm_enabled"],
+    summary["docs_llm_enabled"],
+    summary["validation_enabled"],
+    summary["key_present"],
+    summary["model"],
+    summary["chat_model"],
+    summary["docs_model"],
 )
+for llm_warning in config.scanner.llm_health_warnings():
+    logger.warning("LLM model config: %s", llm_warning)
 
 # ── FastAPI App ──────────────────────────────────────────────────
 

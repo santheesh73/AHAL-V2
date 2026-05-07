@@ -33,6 +33,7 @@ def build_intelligence_schema(session_id: str, session_type: str, scan_result: S
         "project_name": "this project",
         "project_goal": _FALLBACK_TEXT,
         "architecture_style": _FALLBACK_TEXT,
+        "repo_type": "unknown",
         "key_modules": [],
         "core_features": [],
         "risks": [],
@@ -117,6 +118,7 @@ def build_intelligence_schema(session_id: str, session_type: str, scan_result: S
     base["warnings"] = clean_list(list(base["warnings"]) + list(getattr(prd, "warnings", []) or []) + list(getattr(intelligence, "warnings", []) or []))
     base["confidence"] = canonical.confidence.overall.lower()
     base["project_type"] = canonical.project_type
+    base["repo_type"] = canonical.repo_type
     base["architecture_confidence"] = canonical.confidence.architecture.lower()
     base["product_purpose_confidence"] = canonical.confidence.product_purpose.lower()
     base["canonical_intelligence"] = canonical.model_dump()

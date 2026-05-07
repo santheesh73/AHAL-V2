@@ -1,5 +1,6 @@
 from app.docs.models import ModuleSectionItem, DocEvidence
 from app.docs.utils.doc_evidence import sanitize_evidence
+from app.intelligence.readme_sanitizer import is_markup_noise_candidate
 
 class ModuleGenerator:
     def generate(self, intelligence_result) -> list[ModuleSectionItem]:
@@ -16,7 +17,7 @@ class ModuleGenerator:
             # Extract files safely
             files = []
             for ev in evidence:
-                if ev.file and ev.file not in files:
+                if ev.file and not is_markup_noise_candidate(ev.file) and ev.file not in files:
                     files.append(ev.file)
                     
             confidence = "high" if evidence else "low"

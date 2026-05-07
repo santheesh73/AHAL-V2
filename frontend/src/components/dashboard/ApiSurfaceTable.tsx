@@ -1,10 +1,10 @@
 import type { ApiSurfaceItem } from "../../lib/types"
 import { GlassCard } from "../ui/GlassCard"
 
-export function ApiSurfaceTable({ items }: { items: ApiSurfaceItem[] }) {
+export function ApiSurfaceTable({ items, title = "API Surface", emptyMessage = "No API endpoints were detected for this session." }: { items: ApiSurfaceItem[]; title?: string; emptyMessage?: string }) {
   return (
     <GlassCard>
-      <h3 className="text-lg font-semibold text-white">API Surface</h3>
+      <h3 className="text-lg font-semibold text-white">{title}</h3>
       <div className="mt-5 overflow-hidden rounded-3xl border border-white/10">
         {items.length ? (
           <div className="overflow-x-auto">
@@ -29,7 +29,7 @@ export function ApiSurfaceTable({ items }: { items: ApiSurfaceItem[] }) {
               </tbody>
             </table>
           </div>
-        ) : <p className="p-5 text-sm text-slate-400">No API endpoints were detected for this session.</p>}
+        ) : <p className="p-5 text-sm text-slate-400">{emptyMessage}</p>}
       </div>
     </GlassCard>
   )

@@ -1,6 +1,10 @@
 import dataclasses
+import logging
 from unittest.mock import patch
+from urllib.error import HTTPError
 
+from app.config import GEMMA_4_26B_UNAVAILABLE_WARNING
+from app.docs.exporters.pdf_exporter import PDFExporter
 from app.docs.llm.pdf_polish_service import PDFPolishService
 from app.docs.models import PRDResult, PRDSection, ProjectBrief, RiskItem, ProjectStatusItem
 import app.config as config_module
@@ -152,3 +156,30 @@ def test_pdf_polish_preserves_warnings_and_risks(mock_generate, monkeypatch):
         '"warnings": "Warnings below remain deterministic."',
     )
     assert PDFPolishService().polish_for_pdf(_sample_prd()) is None
+
+
+def test_pdf_still_generates_when_gemma_404_occurs(monkeypatch, caplog):
+    _patch_scanner_config(monkeypatch, llm_enabled=True, gemini_api_key="fake-key")
+    import app.intelligence.llm.gemini_client as gemini_module
+
+    monkeypatch.setattr(gemini_module, "config", config_module.config)
+    caplog.set_level(logging.INFO)
+
+    def raise_not_found(*args, **kwargs):
+        raise HTTPError(
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent",
+            code=404,
+            msg="not found",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(gemini_module.urllib_request, "urlopen", raise_not_found)
+
+    prd = _sample_prd()
+    polished = PDFPolishService().polish_for_pdf(prd)
+    pdf_bytes = PDFExporter().export(prd, polished_text=polished)
+
+    assert polished is None
+    assert pdf_bytes.startswith(b"%PDF")
+    assert GEMMA_4_26B_UNAVAILABLE_WARNING in caplog.text

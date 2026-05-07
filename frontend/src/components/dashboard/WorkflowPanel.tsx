@@ -1,10 +1,10 @@
 import type { WorkflowStep } from "../../lib/types"
 import { GlassCard } from "../ui/GlassCard"
 
-export function WorkflowPanel({ steps }: { steps: WorkflowStep[] }) {
+export function WorkflowPanel({ steps, title = "Workflow" }: { steps: WorkflowStep[]; title?: string }) {
   return (
     <GlassCard>
-      <h3 className="text-lg font-semibold text-white">Workflow</h3>
+      <h3 className="text-lg font-semibold text-white">{title}</h3>
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {steps.length ? steps.map((step, index) => (
           <div key={step.title} className="rounded-3xl border border-white/10 bg-white/[0.03] p-5">

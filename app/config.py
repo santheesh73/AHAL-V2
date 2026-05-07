@@ -20,6 +20,88 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_bool_or_none(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+GEMMA_4_26B_A4B_MODEL = "gemma-4-26b-a4b-it"
+GEMMA_4_26B_UNAVAILABLE_WARNING = "Gemma 4 26B polish unavailable — deterministic answer shown."
+GEMMA_4_26B_RATE_LIMIT_WARNING = "Gemma 4 26B rate limit reached — deterministic answer shown."
+GEMMA_4_26B_TIMEOUT_WARNING = "Gemma 4 26B polish timed out — deterministic answer shown."
+GEMMA_4_26B_VALIDATION_WARNING = "Gemma 4 26B polish was rejected by validation — deterministic answer shown."
+_DEPRECATED_LLM_MODELS = {
+    "gemma-26b-it": "gemma-26b-it is deprecated/invalid; use gemma-4-26b-a4b-it.",
+}
+_WARN_ONLY_LLM_MODELS = {
+    "gemini-1.5-flash": "gemini-1.5-flash is not allowed; use gemma-4-26b-a4b-it.",
+    "gemini-2.0-flash": "gemini-2.0-flash is not allowed; use gemma-4-26b-a4b-it.",
+    "gemini-2.5-pro": "gemini-2.5-pro is not allowed; use gemma-4-26b-a4b-it.",
+    "ollama": "ollama is not allowed; use gemma-4-26b-a4b-it through the Gemini API.",
+}
+
+
+def validate_llm_model_name(model: str | None, *, env_name: str = "AHAL_LLM_MODEL") -> tuple[str, tuple[str, ...]]:
+    selected = (model or "").strip() or GEMMA_4_26B_A4B_MODEL
+    if selected == GEMMA_4_26B_A4B_MODEL:
+        return selected, ()
+    if selected in _DEPRECATED_LLM_MODELS:
+        return GEMMA_4_26B_A4B_MODEL, (f"{env_name}: {_DEPRECATED_LLM_MODELS[selected]}",)
+    if selected in _WARN_ONLY_LLM_MODELS:
+        return GEMMA_4_26B_A4B_MODEL, (f"{env_name}: {_WARN_ONLY_LLM_MODELS[selected]}",)
+    return (
+        GEMMA_4_26B_A4B_MODEL,
+        (f"{env_name}: unsupported model '{selected}'; AHAL only supports gemma-4-26b-a4b-it.",),
+    )
+
+
+def _default_llm_model() -> str:
+    return validate_llm_model_name(os.getenv("AHAL_LLM_MODEL", GEMMA_4_26B_A4B_MODEL))[0]
+
+
+def _default_chat_llm_model() -> str:
+    if os.getenv("AHAL_CHAT_LLM_MODEL"):
+        return validate_llm_model_name(os.getenv("AHAL_CHAT_LLM_MODEL"), env_name="AHAL_CHAT_LLM_MODEL")[0]
+    return validate_llm_model_name(os.getenv("AHAL_LLM_MODEL", GEMMA_4_26B_A4B_MODEL))[0]
+
+
+def _default_docs_llm_model() -> str:
+    if os.getenv("AHAL_DOCS_LLM_MODEL"):
+        return validate_llm_model_name(os.getenv("AHAL_DOCS_LLM_MODEL"), env_name="AHAL_DOCS_LLM_MODEL")[0]
+    return _default_chat_llm_model()
+
+
+def _llm_model_warnings() -> tuple[str, ...]:
+    warnings: list[str] = []
+    _, base_warnings = validate_llm_model_name(
+        os.getenv("AHAL_LLM_MODEL", GEMMA_4_26B_A4B_MODEL),
+        env_name="AHAL_LLM_MODEL",
+    )
+    warnings.extend(base_warnings)
+    if os.getenv("AHAL_CHAT_LLM_MODEL"):
+        _, chat_warnings = validate_llm_model_name(
+            os.getenv("AHAL_CHAT_LLM_MODEL"),
+            env_name="AHAL_CHAT_LLM_MODEL",
+        )
+        warnings.extend(chat_warnings)
+    if os.getenv("AHAL_DOCS_LLM_MODEL"):
+        _, docs_warnings = validate_llm_model_name(
+            os.getenv("AHAL_DOCS_LLM_MODEL"),
+            env_name="AHAL_DOCS_LLM_MODEL",
+        )
+        warnings.extend(docs_warnings)
+    return tuple(dict.fromkeys(warnings))
+
+
+def _default_feature_flag(env_name: str, base_enabled: bool) -> bool:
+    explicit = _env_bool_or_none(env_name)
+    if explicit is None:
+        return base_enabled
+    return explicit
+
+
 @dataclass(frozen=True)
 class ScannerConfig:
     """Immutable configuration for the scanner subsystem."""
@@ -70,13 +152,22 @@ class ScannerConfig:
         os.getenv("AHAL_RATE_LIMIT_MAX_REQUESTS", "20")
     )
 
-    # --- LLM / Gemini API (Phase 2) ---
+    # --- LLM / Gemini API (Gemma 4 26B A4B only) ---
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     llm_enabled: bool = _env_bool("AHAL_LLM_ENABLED", False)
-    llm_model: str = os.getenv("AHAL_LLM_MODEL", "gemma-26b-it")
+    llm_provider: str = os.getenv("AHAL_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
+    llm_model: str = field(default_factory=_default_llm_model)
+    chat_llm_model: str = field(default_factory=_default_chat_llm_model)
+    docs_llm_model: str = field(default_factory=_default_docs_llm_model)
+    llm_model_warnings: tuple[str, ...] = field(default_factory=_llm_model_warnings)
     llm_timeout_seconds: int = int(
-        os.getenv("AHAL_LLM_TIMEOUT_SECONDS", "120")
+        os.getenv("AHAL_LLM_TIMEOUT_SECONDS", "180")
     )
+    llm_require_validation: bool = _env_bool("AHAL_LLM_REQUIRE_VALIDATION", True)
+    llm_max_retries: int = int(os.getenv("AHAL_LLM_MAX_RETRIES", os.getenv("AHAL_LLM_RETRY_COUNT", "1")))
+    llm_retry_on_404: bool = _env_bool("AHAL_LLM_RETRY_ON_404", False)
+    llm_retry_on_429: bool = _env_bool("AHAL_LLM_RETRY_ON_429", True)
+    llm_rate_limit_cooldown_seconds: int = int(os.getenv("AHAL_LLM_RATE_LIMIT_COOLDOWN_SECONDS", "60"))
 
     # --- Phase 4 / Chat Configuration ---
     chat_history_max_messages: int = int(os.getenv("AHAL_CHAT_HISTORY_MAX_MESSAGES", "20"))
@@ -90,12 +181,15 @@ class ScannerConfig:
     chat_max_history_messages: int = int(os.getenv("AHAL_CHAT_MAX_HISTORY_MESSAGES", "8"))
     chat_memory_enabled: bool = _env_bool("AHAL_CHAT_MEMORY_ENABLED", True)
     chat_memory_max_messages: int = int(os.getenv("AHAL_CHAT_MEMORY_MAX_MESSAGES", "20"))
-    chat_llm_enabled: bool = _env_bool("AHAL_CHAT_LLM_ENABLED", False)
+    chat_llm_enabled: bool = field(default_factory=lambda: _default_feature_flag("AHAL_CHAT_LLM_ENABLED", _env_bool("AHAL_LLM_ENABLED", False)))
     chat_llm_require_validation: bool = _env_bool("AHAL_CHAT_LLM_REQUIRE_VALIDATION", True)
     chat_llm_streaming: bool = _env_bool("AHAL_CHAT_LLM_STREAMING", False)
+    docs_llm_enabled: bool = field(default_factory=lambda: _default_feature_flag("AHAL_DOCS_LLM_ENABLED", _env_bool("AHAL_LLM_ENABLED", False)))
+    prd_llm_enabled: bool = field(default_factory=lambda: _default_feature_flag("AHAL_PRD_LLM_ENABLED", _env_bool("AHAL_LLM_ENABLED", False)))
+    pdf_llm_enabled: bool = field(default_factory=lambda: _default_feature_flag("AHAL_PDF_LLM_ENABLED", _env_bool("AHAL_LLM_ENABLED", False)))
     purpose_extraction_max_chars: int = int(os.getenv("AHAL_PURPOSE_EXTRACTION_MAX_CHARS", "5000"))
     strict_json_llm_enabled: bool = _env_bool("AHAL_STRICT_JSON_LLM_ENABLED", False)
-    llm_retry_count: int = int(os.getenv("AHAL_LLM_RETRY_COUNT", "1"))
+    llm_retry_count: int = int(os.getenv("AHAL_LLM_RETRY_COUNT", str(int(os.getenv("AHAL_LLM_MAX_RETRIES", "1")))))
     llm_orchestration_enabled: bool = _env_bool("AHAL_LLM_ORCHESTRATION_ENABLED", False)
     llm_primary_provider: str = os.getenv("AHAL_LLM_PRIMARY_PROVIDER", "gemini")
     llm_critic_provider: str = os.getenv("AHAL_LLM_CRITIC_PROVIDER", "gemini")
@@ -190,6 +284,27 @@ class ScannerConfig:
 
     # --- Temp directory ---
     temp_base_dir: str = os.getenv("AHAL_TEMP_DIR", "")
+
+    def llm_startup_summary(self) -> dict[str, object]:
+        return {
+            "provider": self.llm_provider,
+            "model": self.llm_model,
+            "chat_model": self.chat_llm_model,
+            "docs_model": self.docs_llm_model,
+            "docs_llm_enabled": self.docs_llm_enabled,
+            "chat_llm_enabled": self.chat_llm_enabled,
+            "validation_enabled": self.llm_require_validation and self.chat_llm_require_validation,
+            "key_present": bool(self.gemini_api_key),
+            "llm_enabled": self.llm_enabled,
+        }
+
+    def llm_health_warnings(self) -> tuple[str, ...]:
+        warnings = list(self.llm_model_warnings)
+        if self.llm_enabled and not self.chat_llm_enabled:
+            warnings.append("Global LLM is enabled but chat LLM is disabled. Chat will use deterministic fallback.")
+        if self.llm_provider != "gemini":
+            warnings.append(f"AHAL_LLM_PROVIDER: unsupported provider '{self.llm_provider}'; deterministic fallback will be used.")
+        return tuple(dict.fromkeys(warnings))
 
 
 @dataclass(frozen=True)

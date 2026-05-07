@@ -61,6 +61,9 @@ _REPO_SIGNALS: tuple[str, ...] = (
     "risk", "risky", "issue", "problem",
     "test", "coverage", "gap",
     "onboarding", "read first", "new engineer",
+    "new to this project", "where do i start", "where should i start",
+    "start first", "joining this project", "first 30 minutes",
+    "walk me through", "understand this repo", "understand this project",
     "workflow", "flow", "lifecycle",
     "dependency", "dependencies",
     "database", "storage",
@@ -148,6 +151,24 @@ class ChatMessageRouter:
             return ChatRoute("clarification", "followup", "medium", bool(chat_history), bool(chat_history))
 
         if any(signal in lowered_raw for signal in _REPO_SIGNALS):
+            if any(
+                signal in lowered_raw
+                for signal in (
+                    "new to this project",
+                    "where do i start",
+                    "where should i start",
+                    "start first",
+                    "read first",
+                    "onboarding",
+                    "new engineer",
+                    "joining this project",
+                    "first 30 minutes",
+                    "walk me through",
+                    "understand this repo",
+                    "understand this project",
+                )
+            ):
+                return ChatRoute("repo", "onboarding_question", "high", True, True)
             return ChatRoute("repo", "repo_question", "high", True, True)
 
         if re.search(r"[A-Za-z0-9_/.-]+\.(?:py|ts|tsx|js|jsx|json|yml|yaml|md|toml|txt)\b", text):

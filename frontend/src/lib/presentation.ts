@@ -23,6 +23,7 @@ const filteredEvidenceTokens = [
   "credentials",
   "configuration evidence",
 ]
+const markupNoisePattern = /(<\/?\w+[^>]*>|!\[[^\]]*]\([^)]+\)|\bsrc\s*=|\balt\s*=|\bwidth\s*=|\bheight\s*=|\balign\s*=|public\/branding|assets\/logo|logo-chatgpt-transparent|transparent\.png|shields\.io|badge\.svg|\.png\b|\.svg\b|\blogo\b)/i
 
 function normalizeCompareText(value: string): string {
   return safeText(value, "").toLowerCase().replace(/\s+/g, " ").trim()
@@ -389,6 +390,29 @@ export function safeText(text: unknown, fallback: string): string {
     return `${value.slice(0, 237).trimEnd()}...`
   }
 
+  return value
+}
+
+export function sanitizeMarkupNoise(text: string, fallback = ""): string {
+  let value = safeText(text, "")
+  if (!value) {
+    return fallback
+  }
+  value = value
+    .replace(/!\[[^\]]*]\([^)]+\)/g, "")
+    .replace(/<img\b[^>]*>/gi, "")
+    .replace(/<\/?(?:p|div|a|br|picture|source|span|center)\b[^>]*>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\b(?:src|alt|width|height|align|href)\s*=\s*["'][^"']*["']/gi, "")
+    .replace(/\b(?:public\/branding|assets\/logo)\/\S+/gi, "")
+    .replace(/\S*(?:logo-chatgpt-transparent|transparent\.png|shields\.io|badge\.svg)\S*/gi, "")
+    .replace(/\S+\.(?:png|svg)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (!value || markupNoisePattern.test(value)) {
+    return fallback
+  }
   return value
 }
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from app.chat.constants import INSUFFICIENT_EVIDENCE_MESSAGE
 from app.chat.models import ChatAnswer, ChatAnswerSection, ChatContextPack
-from app.chat.utils import build_followups, filter_chat_evidence, sanitize_chat_answer, sanitize_chat_text
+from app.chat.utils import build_followups, evidence_display_label, filter_chat_evidence, sanitize_chat_answer, sanitize_chat_path, sanitize_chat_text
 from app.intelligence.output_guard import CanonicalOutputGuard
+from app.intelligence.repository_type_classifier import is_documentation_repo_type, is_package_like_repo_type
 
 
 class AnswerComposerV2:
@@ -14,12 +15,13 @@ class AnswerComposerV2:
 
     def _compose_deterministic(self, question, intent, context_pack: ChatContextPack) -> ChatAnswer:
         sections: list[ChatAnswerSection] = []
-        evidence = filter_chat_evidence(context_pack.selected_evidence, limit=8)
+        intent_name = intent.intent if hasattr(intent, "intent") else str(intent)
+        evidence_limit = 5 if intent_name == "onboarding_question" else 6
+        evidence = filter_chat_evidence(context_pack.selected_evidence, limit=evidence_limit)
         evidence_ids = list(context_pack.evidence_map.keys())[: min(3, len(context_pack.evidence_map))]
         confidence = context_pack.confidence
-        intent_name = intent.intent if hasattr(intent, "intent") else str(intent)
 
-        if not evidence and not context_pack.relevant_apis and not context_pack.relevant_modules:
+        if intent_name != "onboarding_question" and not evidence and not context_pack.relevant_apis and not context_pack.relevant_modules:
             return sanitize_chat_answer(ChatAnswer(
                 answer=INSUFFICIENT_EVIDENCE_MESSAGE,
                 short_answer="The analyzed evidence does not fully specify this.",
@@ -119,7 +121,7 @@ class AnswerComposerV2:
             short_answer=CanonicalOutputGuard.sanitize_text(sanitize_chat_text(llm_result.get("short_answer"), ""), canonical),
             sections=sections,
             confidence=context_pack.confidence,
-            evidence=filter_chat_evidence(context_pack.selected_evidence, limit=8),
+            evidence=filter_chat_evidence(context_pack.selected_evidence, limit=5 if (intent.intent if hasattr(intent, "intent") else str(intent)) == "onboarding_question" else 6),
             related_files=sorted({ev.file for ev in context_pack.selected_evidence if ev.file}),
             related_nodes=[item["name"] for item in context_pack.relevant_modules[:4] if item.get("name")],
             warnings=[sanitize_chat_text(item) for item in llm_result.get("warnings", []) if sanitize_chat_text(item)],
@@ -136,6 +138,7 @@ class AnswerComposerV2:
         architecture_type = context_pack.architecture_summary.get("type", "unknown")
         uncertainty = self._uncertainty_sentence(context_pack)
         normalized_question = str(question or "").strip().lower()
+        repo_type = str(getattr(canonical, "repo_type", "") if canonical is not None else "").lower()
         if intent_name == "project_goal":
             canonical_why = getattr(canonical, "why", "") if canonical is not None else ""
             if "why" in normalized_question and canonical_why:
@@ -161,24 +164,46 @@ class AnswerComposerV2:
                 return f"{fallback} {uncertainty}"
             return fallback
         if intent_name == "what_is_built":
+            if repo_type == "dataset":
+                return "The repository contains dataset assets and supporting metadata rather than executable application features."
             completed = list(getattr(canonical, "completed", []) or [])
             if completed:
                 titles = ", ".join(item.title for item in completed[:4])
                 return f"This project already includes {titles}."
             return "This repo has detected implementation evidence, but the full built surface is only partially specified."
         if intent_name == "api_explanation":
+            if is_documentation_repo_type(repo_type) and not context_pack.relevant_apis:
+                return "No API endpoints were identified in the analyzed evidence. This appears to be a documentation/curriculum repository rather than an API service."
+            if is_package_like_repo_type(repo_type) and not context_pack.relevant_apis:
+                return "No HTTP API endpoints were identified. This appears to expose package/library APIs instead."
+            if repo_type in {"dataset", "design_assets"} and not context_pack.relevant_apis:
+                return "No API endpoints were identified in the analyzed evidence. This repository appears to distribute content or assets rather than expose an API service."
+            if repo_type == "cli_tool" and not context_pack.relevant_apis:
+                return "No HTTP API endpoints were identified. This appears to be a command-line tool rather than an API service."
             if context_pack.relevant_apis:
                 api = context_pack.relevant_apis[0]
                 return f"{api['method']} {api['path']} appears to be a detected API endpoint in this project."
             return "The analyzed evidence shows API-related structure, but the requested endpoint is not strongly specified."
         if intent_name == "architecture_explanation":
+            if is_documentation_repo_type(repo_type):
+                return "This repository is primarily documentation/curriculum content. No executable application architecture was confirmed from the analyzed evidence."
+            if is_package_like_repo_type(repo_type):
+                return "This repository is primarily organized as a reusable package/library surface rather than a standalone application architecture."
+            if repo_type == "dataset":
+                return "This repository is primarily a dataset and metadata distribution surface rather than an executable application architecture."
             return f"This project appears to use a {architecture_type} architecture based on the detected frameworks, modules, and entry points."
         if intent_name == "workflow_explanation":
+            if repo_type == "cli_tool":
+                return "The main workflow is command-line driven: a user runs a command, arguments are parsed, command logic executes, and results are returned in the terminal."
+            if is_package_like_repo_type(repo_type):
+                return "The main workflow is package consumption: a developer installs the package, imports its public APIs, and the library returns functionality inside another application."
+            if repo_type == "dataset":
+                return "The main workflow is content consumption: a consumer downloads the dataset, reviews its metadata/schema, and uses the files in analysis or training workflows."
             return "The main workflow can be explained from the detected entry points, APIs, and inferred execution steps."
         if intent_name == "test_gap_question":
             return "The highest-priority gaps are the areas where detected workflows lack corresponding test coverage evidence."
         if intent_name == "onboarding_question":
-            return "A new engineer should start with the top entry points, API routes, and workflow-critical modules."
+            return "Start with the project overview, then follow the main entry points, then inspect the API/workflow layer."
         if intent_name == "how_to_run":
             return "The safest way to run this project is to follow detected setup artifacts and entry points only where evidence exists."
         if intent_name == "risk_analysis":
@@ -212,7 +237,8 @@ class AnswerComposerV2:
         if frameworks:
             what_it_is_bits.append(f"Frameworks: {', '.join(frameworks)}.")
         if what_it_is_bits:
-            sections.append(ChatAnswerSection(title="What it is", bullets=what_it_is_bits, evidence_ids=evidence_ids))
+            title = "Project signals" if canonical_what else "What it is"
+            sections.append(ChatAnswerSection(title=title, bullets=what_it_is_bits, evidence_ids=evidence_ids))
 
         architecture_bits = []
         architecture_type = sanitize_chat_text(context_pack.architecture_summary.get("type"), "")
@@ -276,8 +302,127 @@ class AnswerComposerV2:
         return [ChatAnswerSection(title="Highest-Priority Gaps", bullets=bullets, evidence_ids=list(context_pack.evidence_map.keys())[:3])]
 
     def _onboarding_sections(self, context_pack: ChatContextPack) -> list[ChatAnswerSection]:
-        bullets = [f"{item['title']}: {item['detail']}" for item in context_pack.relevant_onboarding_steps[:5]]
-        return [ChatAnswerSection(title="First 30 Minutes", bullets=bullets, evidence_ids=list(context_pack.evidence_map.keys())[:3])]
+        report = context_pack.project_identity.get("onboarding_report") if isinstance(context_pack.project_identity, dict) else None
+        report = report if isinstance(report, dict) else {}
+        repo_type = str(getattr(context_pack.canonical_intelligence, "repo_type", "") or "").lower()
+        project_type = str(getattr(context_pack.canonical_intelligence, "project_type", "") or context_pack.project_identity.get("project_type", "") or "").lower()
+        is_fullstack = repo_type == "fullstack_app" or project_type == "fullstack"
+
+        key_files = self._onboarding_key_files(context_pack)
+        first_10 = self._onboarding_first_10(context_pack, report, is_fullstack)
+        next_20 = self._onboarding_next_20(context_pack, report, is_fullstack)
+        avoid = self._onboarding_avoid_first(context_pack, report)
+        followups = build_followups("onboarding_question")
+
+        return [
+            ChatAnswerSection(title="First 10 minutes", bullets=first_10, evidence_ids=[]),
+            ChatAnswerSection(title="Next 20 minutes", bullets=next_20, evidence_ids=[]),
+            ChatAnswerSection(title="Key files to inspect", bullets=key_files or ["README.md", "package.json"], evidence_ids=list(context_pack.evidence_map.keys())[:5]),
+            ChatAnswerSection(title="What to avoid at first", bullets=avoid, evidence_ids=[]),
+            ChatAnswerSection(title="Suggested next questions", bullets=followups, evidence_ids=[]),
+        ]
+
+    def _onboarding_first_10(self, context_pack: ChatContextPack, report: dict, is_fullstack: bool) -> list[str]:
+        reading_order = report.get("reading_order") if isinstance(report.get("reading_order"), list) else []
+        if reading_order:
+            bullets = []
+            for item in reading_order[:3]:
+                if not isinstance(item, dict):
+                    continue
+                title = sanitize_chat_text(item.get("title"), "")
+                detail = sanitize_chat_text(item.get("detail"), "")
+                text = title if not detail else f"{title}: {detail}"
+                if text:
+                    bullets.append(text)
+            if bullets:
+                return bullets[:3]
+        bullets = ["Read README.md or product metadata to understand the project purpose."]
+        if is_fullstack:
+            bullets.append("Identify the frontend and backend folders.")
+        else:
+            bullets.append("Identify the main source folder and entry points.")
+        bullets.append("Open package/dependency files such as package.json, requirements.txt, or pyproject.toml when present.")
+        return bullets
+
+    def _onboarding_next_20(self, context_pack: ChatContextPack, report: dict, is_fullstack: bool) -> list[str]:
+        entry_points = [sanitize_chat_text(item, "") for item in report.get("key_entry_points", []) if sanitize_chat_text(item, "")]
+        apis = [sanitize_chat_text(item, "") for item in report.get("important_apis", []) if sanitize_chat_text(item, "")]
+        workflows = [sanitize_chat_text(item, "") for item in report.get("workflow_notes", []) if sanitize_chat_text(item, "")]
+        bullets: list[str] = []
+        if entry_points:
+            bullets.append(f"Follow the main entry points: {', '.join(entry_points[:2])}.")
+        elif is_fullstack:
+            bullets.append("Follow frontend entry points and page/component structure.")
+        else:
+            bullets.append("Follow the main app entry points before diving into internals.")
+        if apis:
+            bullets.append(f"Review backend route/API files, starting with {apis[0]}.")
+        elif context_pack.relevant_apis:
+            first_api = context_pack.relevant_apis[0]
+            bullets.append(f"Review backend API routes, starting with {first_api.get('method', 'GET')} {first_api.get('path', '/')}.")
+        else:
+            bullets.append("Review the API/workflow layer only where endpoint evidence exists.")
+        if workflows:
+            bullets.append(f"Trace one workflow: {workflows[0]}.")
+        elif is_fullstack:
+            bullets.append("Trace one user workflow from the frontend UI to the backend API surface.")
+        else:
+            bullets.append("Trace one workflow from entry point to service logic and response.")
+        return bullets[:3]
+
+    def _onboarding_key_files(self, context_pack: ChatContextPack) -> list[str]:
+        candidates: list[str] = []
+        for evidence in context_pack.selected_evidence:
+            label = evidence_display_label(evidence)
+            if label:
+                candidates.append(label)
+        for item in getattr(context_pack.canonical_intelligence, "evidence", []) or []:
+            label = sanitize_chat_path(getattr(item, "label", "") or "")
+            if label:
+                candidates.append(label)
+        for api in context_pack.relevant_apis:
+            file_label = sanitize_chat_path(api.get("file", "") or api.get("framework", "") or "")
+            if file_label:
+                candidates.append(file_label)
+        preferred = ("readme.md", "package.json", "dockerfile", "docker-compose", "main.py", "app.py", "api/", "route", "page.tsx")
+        ranked = sorted(
+            candidates,
+            key=lambda value: (
+                next((index for index, token in enumerate(preferred) if token in value.lower()), len(preferred)),
+                len(value),
+                value.lower(),
+            ),
+        )
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in ranked:
+            cleaned = sanitize_chat_path(item) or sanitize_chat_text(item, "")
+            key = cleaned.lower()
+            if not cleaned or key in seen:
+                continue
+            seen.add(key)
+            result.append(cleaned)
+            if len(result) >= 5:
+                break
+        return result
+
+    def _onboarding_avoid_first(self, context_pack: ChatContextPack, report: dict) -> list[str]:
+        avoid = [sanitize_chat_text(item, "") for item in report.get("avoid_first", []) if sanitize_chat_text(item, "")]
+        gotchas = [sanitize_chat_text(item, "") for item in report.get("gotchas", []) if sanitize_chat_text(item, "")]
+        bullets = avoid[:2] or [
+            "Do not start with generated files or build artifacts.",
+            "Do not start with deep configuration unless setup is failing.",
+        ]
+        bullets.append("Do not assume business purpose beyond the canonical evidence.")
+        if gotchas:
+            bullets.append(f"Keep this early caveat in mind: {gotchas[0]}.")
+        if not self._has_confirmed_setup_evidence(context_pack):
+            bullets.append("Setup commands were not fully confirmed from the selected evidence.")
+        return bullets[:5]
+
+    def _has_confirmed_setup_evidence(self, context_pack: ChatContextPack) -> bool:
+        labels = " ".join(evidence_display_label(item).lower() for item in context_pack.selected_evidence)
+        return any(token in labels for token in ("package.json", "pyproject.toml", "readme.md", "dockerfile", "docker-compose"))
 
     def _module_sections(self, context_pack: ChatContextPack, include_files: bool = False) -> list[ChatAnswerSection]:
         bullets = []

@@ -218,3 +218,11 @@ def test_confidence_is_high_for_greetings():
 def test_confidence_is_high_for_repo_keywords():
     route = router.classify("What APIs exist?")
     assert route.confidence == "high"
+
+
+def test_new_to_project_routes_to_onboarding():
+    route = router.classify("I'm new to this project! Where do I start first?")
+    assert route.route == "repo"
+    assert route.intent == "onboarding_question"
+    assert route.requires_repo_context is True
+    assert route.requires_evidence is True

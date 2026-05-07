@@ -27,6 +27,9 @@ class LatexExporter:
 
     def export(self, prd_result: PRDResult) -> str:
         prd_result = self.validator.validate_export_prd(prd_result)
+        repo_type = str(getattr(getattr(prd_result, "canonical_intelligence", None), "repo_type", "") or getattr(prd_result, "project_type", "") or "").lower()
+        api_title = "Dataset Overview" if repo_type == "dataset" else "Package/API Surface" if repo_type in {"python_package", "npm_package", "component_library", "sdk"} else "API Surface"
+        workflow_title = "Repository Structure" if repo_type in {"documentation", "curriculum", "knowledge_base"} else "Workflow"
         lines = []
         lines.append(r"\documentclass{article}")
         lines.append(r"\usepackage[utf8]{inputenc}")
@@ -108,9 +111,14 @@ class LatexExporter:
             lines.append(r"\end{longtable}")
             
         # 5. API Surface
-        lines.append(r"\section{5. API Surface}")
+        lines.append(rf"\section{{5. {api_title}}}")
         if not prd_result.api_endpoints:
-            lines.append("Insufficient evidence from codebase.")
+            if repo_type == "dataset":
+                lines.append("Dataset content is described through repository files and metadata rather than HTTP endpoints.")
+            elif repo_type in {"python_package", "npm_package", "component_library", "sdk"}:
+                lines.append("No HTTP API endpoints were identified. This repository appears to expose package/library APIs instead.")
+            else:
+                lines.append("Insufficient evidence from codebase.")
         else:
             lines.append(r"\begin{longtable}{|p{1.5cm}|p{4cm}|p{2cm}|p{4cm}|p{2cm}|}")
             lines.append(r"\hline")
@@ -127,7 +135,7 @@ class LatexExporter:
             lines.append(r"\end{longtable}")
             
         # 6. Workflow
-        lines.append(r"\section{6. Workflow}")
+        lines.append(rf"\section{{6. {workflow_title}}}")
         if not prd_result.workflow:
             lines.append("Insufficient evidence from codebase.")
         else:

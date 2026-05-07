@@ -7,11 +7,13 @@ from app.config import config
 from app.docs.llm.prd_prompt_builder import PRDPromptBuilder
 from app.docs.models import PRDResult
 from app.docs.utils.production_text import safe_remaining_summary, safe_risk_summary
-
+from app.llm.response_validator import ResponseValidator
 logger = logging.getLogger("ahal.docs.pdf_polish")
 
 
 class PDFPolishService:
+    """Compatibility wrapper. New code should use app.llm.polish_orchestrator."""
+
     REQUIRED_FIELDS = {
         "executive_summary",
         "project_goal",
@@ -88,9 +90,10 @@ class PDFPolishService:
 
     def __init__(self):
         self.prompt_builder = PRDPromptBuilder()
+        self.response_validator = ResponseValidator()
 
     def polish_for_pdf(self, prd_result: PRDResult) -> Optional[dict]:
-        if not config.scanner.llm_enabled:
+        if not config.scanner.llm_enabled or not config.scanner.docs_llm_enabled or not config.scanner.pdf_llm_enabled:
             return None
         if not config.scanner.gemini_api_key:
             return None
@@ -100,14 +103,15 @@ class PDFPolishService:
 
         from app.intelligence.llm.gemini_client import GeminiClient
 
+        client = GeminiClient()
         try:
-            response_text = GeminiClient().generate(prompt)
+            response_text = client.generate(prompt)
         except Exception:
-            logger.info("PDF LLM polish unavailable; using deterministic PDF.")
+            logger.info("%s", getattr(client, "last_error", "") or "PDF LLM polish unavailable; using deterministic PDF.")
             return None
 
         if not response_text:
-            logger.info("PDF LLM polish unavailable; using deterministic PDF.")
+            logger.info("%s", getattr(client, "last_error", "") or "PDF LLM polish unavailable; using deterministic PDF.")
             return None
 
         validated = self._validate_polished(prd_result, response_text)
@@ -286,6 +290,19 @@ class PDFPolishService:
             if "ai-assisted" not in health_text:
                 return None
             if "diagnos" not in health_text and "medical query workflows" not in health_text and "knowledge retrieval" not in health_text:
+                return None
+
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical is not None:
+            try:
+                parsed["executive_summary"] = self.response_validator.validate_text(canonical, parsed["executive_summary"])
+                parsed["project_goal"] = self.response_validator.validate_text(canonical, parsed["project_goal"])
+                parsed["what"] = self.response_validator.validate_text(canonical, parsed["what"], must_preserve_what=True)
+                parsed["why"] = self.response_validator.validate_text(canonical, parsed["why"], must_preserve_why=True)
+                parsed["built_summary"] = self.response_validator.validate_text(canonical, parsed["built_summary"])
+                parsed["remaining_summary"] = self.response_validator.validate_text(canonical, parsed["remaining_summary"])
+                parsed["risk_summary"] = self.response_validator.validate_text(canonical, parsed["risk_summary"])
+            except Exception:
                 return None
 
         return parsed

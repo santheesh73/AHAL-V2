@@ -40,6 +40,7 @@ from app.docs.template_models import PRDTemplate, RenderedTemplateResult
 from app.graph.models import KnowledgeGraphResult
 from app.indexing.models import DeltaScanRequest, DeltaScanResult, RepoIndex
 from app.indexing.repo_indexer import repo_indexer
+from app.llm.telemetry import llm_telemetry
 from app.llm_orchestration import LLMOrchestrator, OrchestrationRequest
 from app.models.file_schema import FileMetadata, InputType, Priority, ScanResult, ScanStats, ScanStatus, SessionInfo
 from app.onboarding import OnboardingGenerator, OnboardingReport, render_onboarding_markdown
@@ -113,6 +114,26 @@ class TimelineResponse(BaseModel):
 
 
 _SUPPORTED_CODE_LANGUAGES = {"python", "javascript", "typescript", "java", "go", "text"}
+
+
+@router.get("/llm/status")
+async def get_llm_status() -> dict:
+    snapshot = llm_telemetry.snapshot()
+    return {
+        "llm_enabled": config.scanner.llm_enabled,
+        "chat_llm_enabled": config.scanner.chat_llm_enabled,
+        "docs_llm_enabled": config.scanner.docs_llm_enabled,
+        "model": config.scanner.llm_model,
+        "provider": config.scanner.llm_provider,
+        "key_present": bool(config.scanner.gemini_api_key),
+        "last_error_type": snapshot.last_error_type,
+        "fallback_count": snapshot.fallback_count,
+        "rate_limited_until": snapshot.rate_limited_until,
+        "not_found_count": snapshot.not_found_count,
+        "rate_limit_count": snapshot.rate_limit_count,
+        "timeout_count": snapshot.timeout_count,
+        "warnings": list(config.scanner.llm_health_warnings()),
+    }
 
 
 # ── Dependency helpers ───────────────────────────────────────────

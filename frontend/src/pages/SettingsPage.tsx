@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getBackendUrl, getHealth, isBackendConfigured } from "../lib/ahal-api"
+import { getBackendUrl, getHealth, getLlmStatus, isBackendConfigured } from "../lib/ahal-api"
 import { toFriendlyError } from "../lib/errors"
 import { clearSession, getBackendUrlOverride, getSession, setBackendUrlOverride } from "../lib/session-store"
 import { truncateMiddle } from "../lib/utils"
@@ -15,6 +15,8 @@ export function SettingsPage() {
   const [message, setMessage] = useState("")
   const [healthStatus, setHealthStatus] = useState("Checking...")
   const [healthLoading, setHealthLoading] = useState(false)
+  const [llmStatus, setLlmStatus] = useState("Checking...")
+  const [llmDetail, setLlmDetail] = useState("")
 
   useEffect(() => {
     let active = true
@@ -45,7 +47,38 @@ export function SettingsPage() {
       }
     }
 
+    async function checkLlmStatus() {
+      if (!isBackendConfigured()) {
+        if (active) {
+          setLlmStatus("Demo Mode")
+          setLlmDetail("Gemma 4 26B status is available when a live backend is configured.")
+        }
+        return
+      }
+
+      try {
+        const result = await getLlmStatus()
+        if (active) {
+          setLlmStatus(result.data.llm_enabled ? "Gemma 4 26B enabled" : "Fallback mode active")
+          setLlmDetail(
+            [
+              `Chat polish ${result.data.chat_llm_enabled ? "enabled" : "disabled"}`,
+              `Docs polish ${result.data.docs_llm_enabled ? "enabled" : "disabled"}`,
+              `Last error ${result.data.last_error_type || "none"}`,
+              `Fallbacks ${result.data.fallback_count ?? 0}`,
+            ].join(" • "),
+          )
+        }
+      } catch (error) {
+        if (active) {
+          setLlmStatus("Unavailable")
+          setLlmDetail(toFriendlyError(error))
+        }
+      }
+    }
+
     void checkHealth()
+    void checkLlmStatus()
     return () => {
       active = false
     }
@@ -102,6 +135,8 @@ export function SettingsPage() {
               <p>Session ID: {session.sessionId ? truncateMiddle(session.sessionId) : "No active session"}</p>
               <p>Token Status: {session.accessToken ? "Token saved (hidden)" : "No token saved"}</p>
               <p>Connection: {getBackendUrl() || "Demo mode fallback"}</p>
+              <p>LLM Status: {llmStatus}</p>
+              <p>LLM Detail: {llmDetail || "No LLM diagnostics yet."}</p>
             </div>
             <Button variant="secondary" onClick={resetSession}>Clear Session</Button>
           </GlassCard>

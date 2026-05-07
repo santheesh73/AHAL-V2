@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app.intelligence.intelligence_engine import IntelligenceEngine
 from app.intelligence.models import IntelligenceResult, LLMExplanation
+from app.config import GEMMA_4_26B_A4B_MODEL
 from tests.intelligence.conftest import empty_scan_result, fullstack_scan, python_fastapi_scan
 
 
@@ -86,7 +87,7 @@ def test_llm_disabled_by_default():
 def test_llm_explanation_mocked_when_enabled():
     engine = IntelligenceEngine()
     mock_explanation = LLMExplanation(
-        model="gemma3:27b-it",
+        model=GEMMA_4_26B_A4B_MODEL,
         content="This is a FastAPI backend.",
         used=True,
         error=None,

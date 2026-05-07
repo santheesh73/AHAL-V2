@@ -6,6 +6,7 @@ import {
   normalizeApiPath,
   normalizeConfidence,
   safeText,
+  sanitizeMarkupNoise,
   sanitizeChatMessage,
   sanitizeEvidenceDetail,
   sanitizeEvidenceLabel,
@@ -70,6 +71,10 @@ function toText(value: unknown, fallback = "") {
   return safeText(value, fallback)
 }
 
+function displayText(value: unknown, fallback = "") {
+  return sanitizeMarkupNoise(safeText(value, ""), fallback)
+}
+
 function applyCanonicalDeveloperGuard(text: string, canonical?: IntelligenceResponse["canonical_intelligence"]): string {
   const value = toText(text)
   if (!canonical) {
@@ -82,7 +87,9 @@ function applyCanonicalDeveloperGuard(text: string, canonical?: IntelligenceResp
   if (!isDeveloperIdentity) {
     return value
   }
-  if (/content management application/i.test(value)) {
+  if (
+    /content management application|financial research|finance workflows|Backend API Layer|unfamiliar codebases|repository-aware questions|\.env\.example|mongodb:\/\//i.test(value)
+  ) {
     return canonicalWhat || canonicalSummary || value
   }
   return value
@@ -90,13 +97,52 @@ function applyCanonicalDeveloperGuard(text: string, canonical?: IntelligenceResp
 
 function normalizeProjectType(value: unknown): ProjectType {
   const normalized = toText(value).toLowerCase()
+  const directMatches: ProjectType[] = [
+    "documentation",
+    "curriculum",
+    "knowledge_base",
+    "mobile_app",
+    "cli_tool",
+    "python_package",
+    "npm_package",
+    "component_library",
+    "sdk",
+    "plugin",
+    "browser_extension",
+    "vscode_extension",
+    "ml_model_repo",
+    "data_science_notebooks",
+    "dataset",
+    "template",
+    "infrastructure",
+    "devops_automation",
+    "design_assets",
+    "research_code",
+    "monorepo",
+    "mixed",
+  ]
+  if (directMatches.includes(normalized as ProjectType)) {
+    return normalized as ProjectType
+  }
+  if (normalized.includes("curriculum")) {
+    return "curriculum"
+  }
+  if (normalized.includes("documentation")) {
+    return "documentation"
+  }
+  if (normalized.includes("knowledge")) {
+    return "knowledge_base"
+  }
   if (normalized.includes("front")) {
     return "frontend"
   }
   if (normalized.includes("back")) {
     return "backend"
   }
-  return "fullstack"
+  if (normalized.includes("full")) {
+    return "fullstack"
+  }
+  return "unknown"
 }
 
 function getExplicitDescription(raw: IntelligenceResponse): string {
@@ -115,7 +161,7 @@ function getExplicitDescription(raw: IntelligenceResponse): string {
   ]
 
   for (const candidate of candidates) {
-    const text = toText(candidate)
+    const text = displayText(candidate)
     if (!text) {
       continue
     }
@@ -135,7 +181,7 @@ function getExplicitDescription(raw: IntelligenceResponse): string {
 function normalizeProductSummary(raw: IntelligenceResponse, explicitDescription: string): string {
   const canonical = raw.canonical_intelligence
   if (canonical?.product_summary) {
-    return dedupeParagraphText(applyCanonicalDeveloperGuard(toText(canonical.product_summary), canonical))
+    return dedupeParagraphText(applyCanonicalDeveloperGuard(displayText(canonical.product_summary, "Project purpose is not fully specified in the analyzed evidence."), canonical))
   }
   const lower = explicitDescription.toLowerCase()
   if (
@@ -149,10 +195,10 @@ function normalizeProductSummary(raw: IntelligenceResponse, explicitDescription:
 
   if (explicitDescription) {
     const normalized = explicitDescription.replace(/\.$/, "")
-    return `${toText(raw.project_name, "This project")} appears to be ${normalized}.`
+    return `${displayText(raw.project_name, "This project")} appears to be ${normalized}.`
   }
 
-  const fallback = toText(raw.summary?.what ?? raw.project_goal, "Project intelligence is available for this session.")
+  const fallback = displayText(raw.summary?.what ?? raw.project_goal, "Project intelligence is available for this session.")
   if (/content management application/i.test(fallback) && !/cms|content management/i.test(explicitDescription)) {
     return "This project appears to be a developer intelligence platform based on the available code and metadata."
   }
@@ -163,13 +209,13 @@ function normalizeProductSummary(raw: IntelligenceResponse, explicitDescription:
 function normalizeWhat(raw: IntelligenceResponse, explicitDescription: string): string {
   const canonical = raw.canonical_intelligence
   if (canonical?.what) {
-    return applyCanonicalDeveloperGuard(toText(canonical.what), canonical)
+    return applyCanonicalDeveloperGuard(displayText(canonical.what, "The exact product behavior is only partially described by the available intelligence output."), canonical)
   }
   if (explicitDescription) {
     return explicitDescription
   }
 
-  const fallback = toText(raw.summary?.what, "The exact product behavior is only partially described by the available intelligence output.")
+  const fallback = displayText(raw.summary?.what, "The exact product behavior is only partially described by the available intelligence output.")
   if (/content management application/i.test(fallback)) {
     return applyCanonicalDeveloperGuard("This project appears to be a developer intelligence platform based on the available code and metadata.", canonical)
   }
@@ -179,9 +225,9 @@ function normalizeWhat(raw: IntelligenceResponse, explicitDescription: string): 
 function normalizeWhy(raw: IntelligenceResponse): string {
   const canonical = raw.canonical_intelligence
   if (canonical?.why) {
-    return applyCanonicalDeveloperGuard(toText(canonical.why), canonical)
+    return applyCanonicalDeveloperGuard(displayText(canonical.why, "The business or user-facing reason is not fully specified in the analyzed evidence."), canonical)
   }
-  return toText(raw.summary?.why, "The business or user-facing reason is not fully specified in the analyzed evidence.")
+  return displayText(raw.summary?.why, "The business or user-facing reason is not fully specified in the analyzed evidence.")
 }
 
 function collectEvidenceStrings(raw: IntelligenceResponse): string[] {
@@ -263,6 +309,9 @@ function normalizeTechStack(raw: IntelligenceResponse): NormalizedIntelligence["
       if (pattern.test(evidence)) {
         add("languages", language)
       }
+    }
+    if (/\.(md|mdx|rst)$/i.test(evidence)) {
+      add("languages", "Markdown")
     }
   }
 
@@ -360,12 +409,41 @@ function normalizeCompleted(raw: IntelligenceResponse, apiSurface: ApiSurfaceIte
   }
   const result: BriefItem[] = []
   const seen = new Set<string>()
+  const repoType = toText(canonical?.repo_type).toLowerCase()
+
+  if (repoType === "curriculum" || repoType === "documentation" || repoType === "knowledge_base") {
+    pushCompleted(result, seen, repoType === "curriculum" ? "Study Plan Documentation" : "Documentation Content", "README-based documentation is present and describes the repository content.")
+    pushCompleted(result, seen, repoType === "curriculum" ? "Learning Roadmap" : "Resource Organization", "Structured sections organize topics, resources, and learning progression for readers.")
+    if (repoType === "curriculum") {
+      pushCompleted(result, seen, "Interview Preparation Content", "Interview preparation topics and supporting resources were detected in the documentation.")
+    }
+    return result
+  }
+  if (repoType === "cli_tool") {
+    pushCompleted(result, seen, "Command Interface", "A command-line entry point or executable interface was detected.")
+    pushCompleted(result, seen, "Argument Parsing", "Command arguments, flags, or subcommands are configured for the CLI surface.")
+    pushCompleted(result, seen, "Execution Logic", "The repository includes command execution logic for the requested workflow.")
+    pushCompleted(result, seen, "Packaging Metadata", "Packaging or distribution metadata was detected for the CLI tool.")
+    return result
+  }
+  if (["python_package", "npm_package", "component_library", "sdk"].includes(repoType)) {
+    pushCompleted(result, seen, "Public API Surface", "Exported package or library APIs were detected for downstream consumers.")
+    pushCompleted(result, seen, "Package Metadata", "Package distribution metadata was detected in repository manifests.")
+    pushCompleted(result, seen, "Examples / Documentation", "Documentation or usage examples were detected for package consumers.")
+    return result
+  }
+  if (repoType === "dataset") {
+    pushCompleted(result, seen, "Dataset Files", "Dataset assets were detected in the repository.")
+    pushCompleted(result, seen, "Metadata / Schema Documentation", "Supporting metadata or schema documentation was detected.")
+    pushCompleted(result, seen, "Licensing Information", "Dataset licensing or reuse guidance was detected where available.")
+    return result
+  }
 
   if (techStack.frameworks.some((item) => /react|vite|next/i.test(item))) {
     pushCompleted(result, seen, "Frontend Application", "A frontend application is present for dashboard, chat, analysis, or report workflows.")
   }
   if (techStack.frameworks.some((item) => /fastapi|flask|express/i.test(item))) {
-    pushCompleted(result, seen, "Backend API Layer", "A backend API layer is present to process project analysis and response workflows.")
+    pushCompleted(result, seen, "Backend API Surface", "A backend API surface is present to process project analysis and response workflows.")
   }
   if (apiSurface.some((item) => /\/ask|\/chat|\/query/.test(item.path))) {
     pushCompleted(result, seen, "Chat / Query API", "Grounded chat or query endpoints were detected.")
@@ -396,7 +474,7 @@ function normalizeCompleted(raw: IntelligenceResponse, apiSurface: ApiSurfaceIte
   }
 
   if (!result.length) {
-    pushCompleted(result, seen, "Backend API Layer", "Structured backend capabilities were detected, but the returned intelligence was limited.")
+    pushCompleted(result, seen, "Backend API Surface", "Structured backend capabilities were detected, but the returned intelligence was limited.")
   }
 
   return result
@@ -493,6 +571,7 @@ function normalizeIssues(raw: IntelligenceResponse): NormalizedIntelligence["iss
 
 function normalizeWorkflow(raw: IntelligenceResponse, projectType: ProjectType): WorkflowStep[] {
   const canonical = raw.canonical_intelligence
+  const repoType = toText(canonical?.repo_type).toLowerCase()
   if (canonical?.workflow?.length) {
     return toArray(canonical.workflow).map((item) => {
       const record = item as Record<string, unknown>
@@ -504,6 +583,42 @@ function normalizeWorkflow(raw: IntelligenceResponse, projectType: ProjectType):
   }
   const joined = JSON.stringify(toArray(raw.technical?.workflow)).toLowerCase()
   const impossible = joined.includes("types/index.ts") || (joined.includes("frontend") && joined.includes("fastapi") && joined.includes("initializes"))
+  if (projectType === "curriculum" || projectType === "documentation" || projectType === "knowledge_base") {
+    return [
+      { title: "Reader opens the repository documentation", description: "Reader opens the repository documentation." },
+      { title: "README introduces the study plan or guide", description: "README introduces the study plan or guide." },
+      { title: "Sections organize topics and progression", description: "Sections organize topics, resources, and learning progression." },
+      { title: "Supporting docs expand accessibility", description: "Optional translations or supporting files expand accessibility." },
+      { title: "Learner follows the roadmap", description: "Learner follows the roadmap independently." },
+    ]
+  }
+  if (projectType === "cli_tool" || repoType === "cli_tool") {
+    return [
+      { title: "Run the CLI command", description: "A user executes the command-line interface with arguments or subcommands." },
+      { title: "Parse flags and arguments", description: "The CLI parses user input and selects the requested command handler." },
+      { title: "Execute command logic", description: "The tool performs the requested workflow." },
+      { title: "Use configured files or services", description: "Optional files, configs, or supporting services are used when configured." },
+      { title: "Return terminal output", description: "The CLI prints results, logs, or exit status for the user." },
+    ]
+  }
+  if (["python_package", "npm_package", "component_library", "sdk"].includes(projectType) || ["python_package", "npm_package", "component_library", "sdk"].includes(repoType)) {
+    return [
+      { title: "Install the package", description: "A developer adds the package/library to another project." },
+      { title: "Import public APIs", description: "The consuming application imports exported modules, functions, or components." },
+      { title: "Execute package logic", description: "The library performs the requested functionality inside the host application." },
+      { title: "Use optional integrations", description: "Configured dependencies or platform clients are used where required." },
+      { title: "Return results to caller", description: "The package returns values, behavior, or UI output through its public API surface." },
+    ]
+  }
+  if (projectType === "dataset" || repoType === "dataset") {
+    return [
+      { title: "Download dataset assets", description: "A downstream user accesses the dataset files." },
+      { title: "Review metadata and schema", description: "Supporting documentation explains dataset structure and meaning." },
+      { title: "Load files into tooling", description: "Consumers parse the files in their own analysis or training workflow." },
+      { title: "Validate quality and provenance", description: "Consumers check schema, licensing, and quality as needed." },
+      { title: "Use the dataset downstream", description: "The repository supports analysis, reporting, or model training elsewhere." },
+    ]
+  }
 
   if (projectType === "backend") {
     return [
@@ -656,9 +771,10 @@ export function normalizeIntelligence(raw: unknown): NormalizedIntelligence {
   const apiSurface = normalizeApiSurface(intelligence)
   const normalizedBase: Omit<NormalizedIntelligence, "dataQuality"> = {
     sessionId: toText(intelligence.canonical_intelligence?.session_id ?? intelligence.session_id),
-    projectName: toText(intelligence.canonical_intelligence?.project_name ?? intelligence.project_name, "Analyzed Project"),
+    projectName: displayText(intelligence.canonical_intelligence?.project_name ?? intelligence.project_name, "Analyzed Project"),
     projectSummary: normalizeProductSummary(intelligence, explicitDescription),
     projectType,
+    repoType: toText(intelligence.canonical_intelligence?.repo_type),
     architectureConfidence: normalizeConfidence(intelligence.canonical_intelligence?.confidence?.architecture ?? intelligence.architecture_confidence ?? intelligence.confidence),
     productPurposeConfidence: normalizeConfidence(intelligence.canonical_intelligence?.confidence?.product_purpose ?? (explicitDescription ? "High" : intelligence.product_purpose_confidence ?? intelligence.confidence)),
     what: normalizeWhat(intelligence, explicitDescription),

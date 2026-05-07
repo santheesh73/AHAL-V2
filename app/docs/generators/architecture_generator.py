@@ -1,5 +1,7 @@
 from app.docs.models import PRDSection, DocEvidence
+from app.docs.fact_snapshot import PRDFactSnapshot
 from app.docs.utils.doc_evidence import sanitize_evidence
+from app.intelligence.repository_type_classifier import is_documentation_repo_type
 
 def _get_architecture_obj(input_obj):
     if hasattr(input_obj, "architecture"):
@@ -7,7 +9,15 @@ def _get_architecture_obj(input_obj):
     return input_obj
 
 class ArchitectureGenerator:
-    def generate(self, intelligence_result) -> PRDSection:
+    def generate(self, intelligence_result, snapshot: PRDFactSnapshot | None = None) -> PRDSection:
+        if snapshot is not None and is_documentation_repo_type(snapshot.repo_type):
+            return PRDSection(
+                title="Architecture",
+                content="This repository is primarily documentation/curriculum content. No executable application architecture was confirmed from the analyzed evidence.",
+                evidence=[],
+                confidence="low",
+                warnings=[],
+            )
         arch_obj = _get_architecture_obj(intelligence_result)
         
         arch_type = getattr(arch_obj, "type", None)

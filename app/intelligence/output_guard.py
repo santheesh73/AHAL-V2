@@ -10,6 +10,7 @@ from app.intelligence.presentation_models import (
     CanonicalStatusItem,
     CanonicalWorkflowStep,
 )
+from app.intelligence.readme_sanitizer import is_markup_noise_candidate, sanitize_text_for_display
 
 
 class CanonicalOutputGuard:
@@ -29,15 +30,48 @@ class CanonicalOutputGuard:
         re.compile(r"unfamiliar codebases", re.IGNORECASE),
         re.compile(r"repository-aware questions", re.IGNORECASE),
         re.compile(r"generate technical documentation", re.IGNORECASE),
+        re.compile(r"architecture diffs", re.IGNORECASE),
+        re.compile(r"test gap reports", re.IGNORECASE),
         re.compile(r"project intelligence", re.IGNORECASE),
+    )
+    _FINANCE_PATTERNS = (
+        re.compile(r"financial research", re.IGNORECASE),
+        re.compile(r"finance workflows", re.IGNORECASE),
+        re.compile(r"investment research", re.IGNORECASE),
+    )
+    _MEDICAL_PATTERNS = (
+        re.compile(r"medical diagnosis", re.IGNORECASE),
+        re.compile(r"healthcare platform", re.IGNORECASE),
+    )
+    _DOC_APP_PATTERNS = (
+        re.compile(r"Backend API Layer", re.IGNORECASE),
+        re.compile(r"frontend app", re.IGNORECASE),
+        re.compile(r"database integration", re.IGNORECASE),
+        re.compile(r"auth missing", re.IGNORECASE),
+        re.compile(r"deployment missing", re.IGNORECASE),
+    )
+    _RAW_DISPLAY_PATTERNS = (
+        re.compile(r"<p", re.IGNORECASE),
+        re.compile(r"<img", re.IGNORECASE),
+        re.compile(r"</", re.IGNORECASE),
+        re.compile(r"\bsrc\s*=", re.IGNORECASE),
+        re.compile(r"\balt\s*=", re.IGNORECASE),
+        re.compile(r"\bwidth\s*=", re.IGNORECASE),
+        re.compile(r"\bheight\s*=", re.IGNORECASE),
+        re.compile(r"\balign\s*=", re.IGNORECASE),
+        re.compile(r"\.png\b", re.IGNORECASE),
+        re.compile(r"\.svg\b", re.IGNORECASE),
+        re.compile(r"public/branding", re.IGNORECASE),
+        re.compile(r"logo-chatgpt-transparent", re.IGNORECASE),
     )
 
     @classmethod
     def sanitize_canonical(cls, canonical: CanonicalProjectIntelligence) -> CanonicalProjectIntelligence:
         sanitized = canonical.model_copy(deep=True)
         sanitized.product_summary = cls._sanitize_field_text(sanitized.product_summary, sanitized, prefer_summary=True)
+        sanitized.project_goal = cls._sanitize_field_text(sanitized.project_goal or sanitized.product_summary, sanitized, prefer_summary=True)
         sanitized.what = cls._sanitize_field_text(sanitized.what, sanitized, prefer_summary=False)
-        sanitized.why = cls._sanitize_field_text(sanitized.why, sanitized, prefer_summary=False)
+        sanitized.why = cls.sanitize_why(sanitized)
         if cls._should_strip_ahal_why(sanitized):
             sanitized.why = "The business or user-facing reason is not fully specified in the analyzed evidence."
         sanitized.architecture_summary = cls.sanitize_text(sanitized.architecture_summary, sanitized)
@@ -105,9 +139,19 @@ class CanonicalOutputGuard:
 
     @classmethod
     def sanitize_text(cls, text: str, canonical: CanonicalProjectIntelligence | None = None) -> str:
-        value = str(text or "").replace("**", "").strip()
+        raw_value = str(text or "").replace("**", "").strip()
+        raw_had_markup = cls._contains_markup_noise(raw_value)
+        value = raw_value
+        value = sanitize_text_for_display(value, fallback="")
         value = cls._EMOJI_PREFIX_RE.sub("", value).strip()
-        if canonical is not None and cls._is_developer_project(canonical) and cls._contains_forbidden_terms(value):
+        if not value:
+            if canonical is not None and raw_had_markup:
+                return cls._conservative_fallback(canonical, field="what")
+            return ""
+        value = re.sub(r"\bclinical diagnosis\b", "medical diagnosis", value, flags=re.IGNORECASE)
+        if canonical is not None and (raw_had_markup or cls._contains_markup_noise(value)):
+            return cls._conservative_fallback(canonical, field="what")
+        if canonical is not None and cls._contains_unsupported_terms(value, canonical):
             replacement = cls._fallback_text(canonical, prefer_summary=False)
             value = replacement if replacement else value
         if canonical is not None and cls._should_strip_ahal_why_for_text(value, canonical):
@@ -116,16 +160,44 @@ class CanonicalOutputGuard:
 
     @classmethod
     def assert_no_forbidden_terms(cls, text: str, canonical: CanonicalProjectIntelligence | None = None) -> None:
-        if canonical is None or not cls._is_developer_project(canonical):
+        if canonical is None:
             return
-        if cls._contains_forbidden_terms(str(text or "")):
-            raise ValueError("Forbidden wrong-domain text detected in canonical developer/code intelligence output.")
+        if cls._contains_unsupported_terms(str(text or ""), canonical):
+            raise ValueError("Forbidden wrong-domain text detected in canonical output.")
+
+    @classmethod
+    def sanitize_why(cls, canonical: CanonicalProjectIntelligence) -> str:
+        raw_value = str(getattr(canonical, "why", "") or "").replace("**", "").strip()
+        raw_had_markup = cls._contains_markup_noise(raw_value)
+        value = raw_value
+        value = sanitize_text_for_display(value, fallback="")
+        value = cls._EMOJI_PREFIX_RE.sub("", value).strip()
+        if not value:
+            return "The business or user-facing reason is not fully specified in the analyzed evidence."
+        value = re.sub(r"\bclinical diagnosis\b", "medical diagnosis", value, flags=re.IGNORECASE)
+        if raw_had_markup or cls._contains_markup_noise(value):
+            return "The business or user-facing reason is not fully specified in the analyzed evidence."
+        if cls._contains_unsupported_terms(value, canonical):
+            return "The business or user-facing reason is not fully specified in the analyzed evidence."
+        return cls._sanitize_field_text(value, canonical, prefer_summary=False)
 
     @classmethod
     def _sanitize_field_text(cls, text: str, canonical: CanonicalProjectIntelligence, prefer_summary: bool) -> str:
-        value = str(text or "").replace("**", "").strip()
+        raw_value = str(text or "").replace("**", "").strip()
+        raw_had_markup = cls._contains_markup_noise(raw_value)
+        value = raw_value
+        value = sanitize_text_for_display(value, fallback="")
         value = cls._EMOJI_PREFIX_RE.sub("", value).strip()
-        if cls._is_developer_project(canonical) and cls._contains_forbidden_terms(value):
+        if not value:
+            if raw_had_markup:
+                field = "summary" if prefer_summary else "what"
+                return cls._conservative_fallback(canonical, field=field)
+            return ""
+        value = re.sub(r"\bclinical diagnosis\b", "medical diagnosis", value, flags=re.IGNORECASE)
+        if raw_had_markup or cls._contains_markup_noise(value):
+            field = "summary" if prefer_summary else "what"
+            return cls._conservative_fallback(canonical, field=field)
+        if cls._contains_unsupported_terms(value, canonical):
             replacement = cls._fallback_text(canonical, prefer_summary=prefer_summary)
             value = replacement if replacement else value
         return value
@@ -141,8 +213,87 @@ class CanonicalOutputGuard:
         return ""
 
     @classmethod
+    def _contains_markup_noise(cls, text: str) -> bool:
+        value = str(text or "")
+        if not value.strip():
+            return False
+        return is_markup_noise_candidate(value) or any(pattern.search(value) for pattern in cls._RAW_DISPLAY_PATTERNS)
+
+    @classmethod
+    def _conservative_fallback(cls, canonical: CanonicalProjectIntelligence, field: str = "summary") -> str:
+        name = str(getattr(canonical, "project_name", "") or "This project").strip()
+        repo_type = str(getattr(canonical, "repo_type", "") or "").lower()
+        project_type = str(getattr(canonical, "project_type", "") or "").lower()
+        normalized = repo_type or project_type
+        if field == "why":
+            return "The business or user-facing reason is not fully specified in the analyzed evidence."
+        if normalized in {"frontend_app", "frontend"}:
+            if field == "what":
+                return f"{name} appears to be a frontend application based on the detected frontend structure."
+            return f"{name} appears to be a frontend application. The exact product purpose is not fully specified in the analyzed evidence."
+        if normalized in {"backend_service", "backend"}:
+            if field == "what":
+                return f"{name} appears to be a backend service based on the detected backend structure."
+            return f"{name} appears to be a backend service. The exact product purpose is not fully specified in the analyzed evidence."
+        if normalized in {"fullstack_app", "fullstack", "application"} or project_type == "fullstack":
+            if field == "what":
+                return f"{name} appears to be a fullstack application based on the detected frontend and backend structure."
+            return f"{name} appears to be a fullstack application. The exact product purpose is not fully specified in the analyzed evidence."
+        if normalized in {"design_assets", "design_assets_repo"}:
+            return f"{name} appears to contain frontend assets or branding files. The exact product purpose is not fully specified in the analyzed evidence."
+        if field == "what":
+            return f"{name} is a repository whose exact purpose is not fully specified in the analyzed evidence."
+        return f"{name} appears to be a software project. The exact product purpose is not fully specified in the analyzed evidence."
+
+    @classmethod
     def _contains_forbidden_terms(cls, text: str) -> bool:
         return any(pattern.search(str(text or "")) for pattern in cls._FORBIDDEN_PATTERNS)
+
+    @classmethod
+    def _contains_unsupported_terms(cls, text: str, canonical: CanonicalProjectIntelligence) -> bool:
+        value = str(text or "")
+        if cls._is_developer_project(canonical) and cls._contains_forbidden_terms(value):
+            return True
+        if not cls._supports_finance(canonical) and any(pattern.search(value) for pattern in cls._FINANCE_PATTERNS):
+            return True
+        if not cls._supports_medical(canonical) and any(pattern.search(value) for pattern in cls._MEDICAL_PATTERNS):
+            return True
+        if str(getattr(canonical, "repo_type", "") or "").lower() in {"documentation", "curriculum", "knowledge_base"} and any(
+            pattern.search(value) for pattern in cls._DOC_APP_PATTERNS
+        ):
+            return True
+        return False
+
+    @classmethod
+    def _supports_finance(cls, canonical: CanonicalProjectIntelligence) -> bool:
+        joined = cls._canonical_supported_text(canonical)
+        return any(token in joined for token in ("finance", "financial", "investment", "market", "stock", "portfolio", "trading"))
+
+    @classmethod
+    def _supports_medical(cls, canonical: CanonicalProjectIntelligence) -> bool:
+        joined = cls._canonical_supported_text(canonical)
+        return any(token in joined for token in ("medical", "healthcare", "clinical", "diagnosis"))
+
+    @classmethod
+    def _canonical_joined_text(cls, canonical: CanonicalProjectIntelligence) -> str:
+        return " ".join(
+            [
+                str(getattr(canonical, "product_domain", "") or ""),
+                str(getattr(canonical, "product_summary", "") or ""),
+                str(getattr(canonical, "what", "") or ""),
+                str(getattr(canonical, "why", "") or ""),
+            ]
+        ).lower()
+
+    @classmethod
+    def _canonical_supported_text(cls, canonical: CanonicalProjectIntelligence) -> str:
+        return " ".join(
+            [
+                str(getattr(canonical, "product_domain", "") or ""),
+                str(getattr(canonical, "product_summary", "") or ""),
+                str(getattr(canonical, "what", "") or ""),
+            ]
+        ).lower()
 
     @classmethod
     def _is_developer_project(cls, canonical: CanonicalProjectIntelligence) -> bool:

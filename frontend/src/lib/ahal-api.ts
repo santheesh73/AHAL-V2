@@ -32,6 +32,7 @@ import type {
   HealthResponse,
   IntelligenceData,
   IntelligenceResponse,
+  LlmStatusResponse,
   OnboardingReport,
   OnboardingResponse,
   PrdDiffResponse,
@@ -570,4 +571,22 @@ export async function getHealth() {
   }
   const demo: HealthResponse = { ok: true, status: "demo", service: "AHAL AI Demo" }
   return requestJson<HealthResponse>("/health", { headers: buildHeaders() }, demo)
+}
+
+export async function getLlmStatus() {
+  const demo: LlmStatusResponse = {
+    llm_enabled: false,
+    chat_llm_enabled: false,
+    docs_llm_enabled: false,
+    model: "gemma-4-26b-a4b-it",
+    provider: "gemini",
+    key_present: false,
+    last_error_type: null,
+    fallback_count: 0,
+    warnings: ["Demo mode does not use backend LLM polish."],
+  }
+  if (!isBackendConfigured()) {
+    return { data: demo, demoMode: true }
+  }
+  return requestJson<LlmStatusResponse>("/analyze/llm/status", { headers: buildHeaders() }, demo)
 }

@@ -26,6 +26,9 @@ class MarkdownExporter:
         canonical = getattr(prd_result, "canonical_intelligence", None)
         self._assert_canonical_domain_safety(prd_result)
         lines = []
+        repo_type = str(getattr(getattr(prd_result, "canonical_intelligence", None), "repo_type", "") or getattr(prd_result, "project_type", "") or "").lower()
+        api_title = "Dataset Overview" if repo_type == "dataset" else "Package/API Surface" if repo_type in {"python_package", "npm_package", "component_library", "sdk"} else "API Surface"
+        workflow_title = "Repository Structure" if repo_type in {"documentation", "curriculum", "knowledge_base"} else "Workflow"
         lines.append("# Project Requirement Document\n")
         
         # 1. Project Overview
@@ -90,9 +93,14 @@ class MarkdownExporter:
             lines.append("")
             
         # 5. API Surface
-        lines.append("## 5. API Surface\n")
+        lines.append(f"## 5. {api_title}\n")
         if not prd_result.api_endpoints:
-            lines.append("Insufficient evidence from codebase.\n")
+            if repo_type == "dataset":
+                lines.append("Dataset content is described through repository files and metadata rather than HTTP endpoints.\n")
+            elif repo_type in {"python_package", "npm_package", "component_library", "sdk"}:
+                lines.append("No HTTP API endpoints were identified. This repository appears to expose package/library APIs instead.\n")
+            else:
+                lines.append("Insufficient evidence from codebase.\n")
         else:
             lines.append("| Method | Path | Framework | Source File | Confidence |")
             lines.append("|---|---|---|---|---|")
@@ -106,7 +114,7 @@ class MarkdownExporter:
             lines.append("")
             
         # 6. Workflow
-        lines.append("## 6. Workflow\n")
+        lines.append(f"## 6. {workflow_title}\n")
         if not prd_result.workflow:
             lines.append("Insufficient evidence from codebase.\n")
         else:

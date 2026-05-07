@@ -4,6 +4,7 @@ from unittest.mock import Mock
 from app.docs.utils.production_text import safe_next_steps
 from app.docs.fact_snapshot import PRDFactSnapshot, build_fact_snapshot
 from app.intelligence.product_identity import ProductIdentityResolver
+from app.intelligence.repository_type_classifier import is_documentation_repo_type
 
 def safe_str(value, default="") -> str:
     if value is None:
@@ -94,6 +95,38 @@ class ProjectBriefGenerator:
         warnings = []
         product_identity = product_identity or self.identity_resolver.resolve(scan_result=scan_result, intelligence_result=intelligence_result)
         snapshot = snapshot or build_fact_snapshot(scan_result=scan_result, intelligence_result=intelligence_result, product_identity=product_identity)
+
+        overview_lower = safe_str(getattr(overview, "content", ""), "").lower()
+        has_runtime_signals = bool(
+            snapshot.has_backend
+            or snapshot.has_frontend
+            or snapshot.api_count
+            or any(token in overview_lower for token in ("backend", "frontend", "api", "service", "fastapi", "application"))
+        )
+
+        if is_documentation_repo_type(snapshot.repo_type) and canonical_intelligence is None and not has_runtime_signals:
+            goal_text = safe_str(overview.content, "This repository appears to contain documentation or curriculum content.")
+            what_text = "This repository organizes documentation, study-plan content, or reference material rather than an executable application."
+            why_text = "It exists to help readers follow structured documentation or learning resources."
+            completed = [
+                ProjectStatusItem(title="Documentation Content", status="built", description="Repository documentation content is present.", confidence="high"),
+                ProjectStatusItem(title="Resource Organization", status="built", description="Topics and resources are organized for readers.", confidence="medium"),
+            ]
+            remaining = [
+                ProjectStatusItem(title="No executable application architecture was detected.", status="missing", description="No executable application architecture was detected.", confidence="high"),
+                ProjectStatusItem(title="Database / Storage", status="missing", description="No database/storage layer is required based on available evidence.", confidence="high"),
+            ]
+            return ProjectBrief(
+                goal=PRDSection(title="Project Goal", content=goal_text, confidence="medium"),
+                what=PRDSection(title="What This Project Is", content=what_text, confidence="medium"),
+                why=PRDSection(title="Why This Project Exists", content=why_text, confidence="medium"),
+                completed=completed,
+                remaining=remaining,
+                issues=[],
+                next_steps=safe_next_steps(remaining, []),
+                confidence="medium",
+                warnings=[],
+            )
 
         if canonical_intelligence is not None:
             canonical_confidence = safe_str(getattr(getattr(canonical_intelligence, "confidence", None), "product_purpose", "medium"), "medium").lower()

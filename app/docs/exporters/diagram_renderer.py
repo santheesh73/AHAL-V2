@@ -11,6 +11,19 @@ def render_architecture_diagram(pdf, prd_result):
 
     arch_label = str(getattr(prd_result, "architecture_label", "") or getattr(prd_result, "project_type", "") or "").lower()
     arch_text = arch_content.lower()
+    non_app_repo_types = {
+        "documentation", "curriculum", "knowledge_base", "cli_tool", "python_package", "npm_package",
+        "component_library", "sdk", "browser_extension", "vscode_extension", "dataset", "ml_model_repo",
+        "data_science_notebooks", "template", "infrastructure", "devops_automation", "design_assets",
+        "research_code", "monorepo",
+    }
+    if arch_label in non_app_repo_types or any(token in arch_text for token in (
+        "documentation/curriculum content", "package with importable library apis", "dataset and metadata distribution",
+        "command-line execution flow", "starter/template structure", "infrastructure-as-code", "automation and pipeline configuration",
+    )):
+        pdf.cell(0, 10, "No executable application architecture was confirmed from the analyzed evidence.", ln=True)
+        pdf.ln(5)
+        return
     
     layers = []
     if arch_label in {"frontend", "fullstack"} or ("frontend" in arch_text and arch_label != "backend"):

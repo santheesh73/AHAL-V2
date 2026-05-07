@@ -8,6 +8,7 @@ from app.intelligence.intelligence_engine import IntelligenceEngine
 from app.models.file_schema import ScanStatus
 from app.sessions.session_manager import session_manager
 from tests.intelligence.test_canonical_presenter import _contextbridge_scan
+from tests.intelligence.test_product_identity_noise_filter import noisy_fullstack_scan
 
 
 def test_pdf_uses_canonical_summary():
@@ -113,3 +114,41 @@ def test_dashboard_why_matches_canonical(client):
     data = response.json()
     assert data["canonical_intelligence"]["why"] == data["summary"]["why"]
     assert data["canonical_intelligence"]["why"] == data["project_brief"]["why"]
+
+
+def test_dashboard_payload_no_html_markup(client):
+    sid = session_manager.create_session(session_type="folder", source_name="noise.zip")
+    scan = noisy_fullstack_scan()
+    scan.session_id = sid
+    scan.status = ScanStatus.COMPLETED
+    session_manager.set_result(sid, scan)
+
+    response = client.get(f"/analyze/intelligence/{sid}")
+    assert response.status_code == 200
+    data = response.json()
+    rendered = " ".join(
+        [
+            data.get("project_goal", ""),
+            data.get("summary", {}).get("what", ""),
+            data.get("summary", {}).get("why", ""),
+            data.get("canonical_intelligence", {}).get("product_summary", ""),
+            data.get("canonical_intelligence", {}).get("what", ""),
+        ]
+    ).lower()
+
+    for token in ("<p", "<img", "src=", "alt=", "width=", "logo-chatgpt-transparent"):
+        assert token not in rendered
+
+
+def test_pdf_no_html_markup():
+    scan = noisy_fullstack_scan()
+    intelligence = IntelligenceEngine().analyze(scan)
+    graph = KnowledgeGraphEngine().build(scan, intelligence)
+    prd = PRDEngine().generate(scan, intelligence, graph, session_id="noise-session")
+
+    markdown = MarkdownExporter().export(prd).lower()
+    pdf_text = PDFExporter().export(prd).decode("latin-1", errors="ignore").lower()
+    rendered = f"{markdown} {pdf_text}"
+
+    for token in ("<p", "<img", "src=", "alt=", "width=", "logo-chatgpt-transparent"):
+        assert token not in rendered

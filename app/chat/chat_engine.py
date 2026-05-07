@@ -159,8 +159,8 @@ class ChatEngine:
                 context_pack.selected_evidence.append(evidence)
             if len(context_pack.selected_evidence) >= 8:
                 break
-        context_pack.selected_evidence = filter_chat_evidence(context_pack.selected_evidence, limit=8)
-        context_pack.evidence_map = {f"E{index}": evidence for index, evidence in enumerate(context_pack.selected_evidence[:8], start=1)}
+        context_pack.selected_evidence = filter_chat_evidence(context_pack.selected_evidence, limit=6)
+        context_pack.evidence_map = {f"E{index}": evidence for index, evidence in enumerate(context_pack.selected_evidence[:6], start=1)}
 
         llm_payload = None
         warnings = list(context_pack.warnings)

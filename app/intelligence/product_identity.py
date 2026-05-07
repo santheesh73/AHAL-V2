@@ -10,6 +10,14 @@ from app.docs.models import DocEvidence
 from app.docs.utils.evidence_sanitizer import sanitize_doc_evidence_list, sanitize_path, sanitize_text
 from app.docs.utils.production_text import clean_list, summarize_stack
 from app.intelligence.evidence_strength import DOMAIN_SIGNALS, EXPLICIT_METADATA_FILES, WEAK_TECHNICAL_SIGNALS, is_forbidden_product_identity
+from app.intelligence.readme_sanitizer import (
+    has_meaningful_identity_words,
+    is_markup_noise_candidate,
+    is_strong_identity_phrase,
+    sanitize_readme_for_identity,
+    sanitize_text_for_display,
+)
+from app.intelligence.repository_type_classifier import RepositoryTypeClassifier, documentation_domain_for_repo_type, is_documentation_repo_type
 
 
 ConfidenceLevel = str
@@ -31,6 +39,7 @@ class ProductIdentity(BaseModel):
 class ProductIdentityResolver:
     def resolve(self, scan_result=None, intelligence_result=None, contents: Optional[dict[str, object]] = None) -> ProductIdentity:
         contents = self._contents(scan_result, contents)
+        repo_type = RepositoryTypeClassifier().classify(scan_result=scan_result, intelligence_result=intelligence_result).repo_type
         metadata = self._metadata(contents)
         evidence: list[DocEvidence] = []
         warnings: list[str] = []
@@ -38,11 +47,11 @@ class ProductIdentityResolver:
         project_name, name_confidence, name_evidence = self._project_name(metadata)
         evidence.extend(name_evidence)
 
-        domain, domain_confidence, domain_evidence = self._domain(metadata, contents, intelligence_result)
+        domain, domain_confidence, domain_evidence = self._domain(metadata, contents, intelligence_result, repo_type)
         evidence.extend(domain_evidence)
         evidence.extend(self._dependency_evidence(intelligence_result))
 
-        architecture = self._architecture_label(intelligence_result, contents)
+        architecture = self._architecture_label(intelligence_result, contents, repo_type)
         ui_surface = self._ui_surface(contents)
         stack = summarize_stack(
             getattr(intelligence_result, "frameworks", []) if intelligence_result is not None else [],
@@ -109,20 +118,24 @@ class ProductIdentityResolver:
             lowered = str(path).replace("\\", "/").lower()
             text = self._to_text(value)
             if lowered.endswith("readme.md") or lowered.endswith("readme.mdx"):
-                title, description = self._readme_metadata(text)
-                metadata["readme_title"] = title
-                metadata["readme_description"] = description
+                title, description = self._readme_metadata(sanitize_readme_for_identity(text))
+                if lowered in {"readme.md", "readme.mdx"}:
+                    metadata["readme_title"] = title
+                    metadata["readme_description"] = description
+                elif not metadata["readme_title"]:
+                    metadata["readme_title"] = title
+                    metadata["readme_description"] = description
             elif lowered.endswith("package.json"):
                 try:
                     data = json.loads(text or "{}")
                 except Exception:
                     data = {}
                 metadata["package_name"] = sanitize_text(data.get("name", ""), fallback="")
-                metadata["package_description"] = sanitize_text(data.get("description", ""), fallback="")
+                metadata["package_description"] = self._clean_description_candidate(data.get("description", ""))
             elif lowered.endswith("pyproject.toml"):
                 metadata["pyproject_name"], metadata["pyproject_description"] = self._pyproject_metadata(text)
             elif "/docs/" in lowered or lowered.endswith((".md", ".rst")):
-                metadata["docs_text"] += f" {text[:1200]}"
+                metadata["docs_text"] += f" {sanitize_readme_for_identity(text)[:1200]}"
         return metadata
 
     def _project_name(self, metadata: dict[str, str]) -> tuple[Optional[str], str, list[DocEvidence]]:
@@ -145,7 +158,17 @@ class ProductIdentityResolver:
                 ]
         return None, "low", []
 
-    def _domain(self, metadata: dict[str, str], contents: dict[str, object], intelligence_result) -> tuple[str, str, list[DocEvidence]]:
+    def _domain(self, metadata: dict[str, str], contents: dict[str, object], intelligence_result, repo_type: str = "unknown") -> tuple[str, str, list[DocEvidence]]:
+        if is_documentation_repo_type(repo_type):
+            return documentation_domain_for_repo_type(repo_type, metadata.get("readme_description", "")), "high", [
+                DocEvidence(
+                    source_type="file",
+                    source_id="README.md",
+                    file="README.md",
+                    reason="Repository metadata describes documentation or curriculum content.",
+                    confidence="high",
+                )
+            ]
         docs_text = " ".join(
             [
                 metadata.get("readme_title", ""),
@@ -223,7 +246,9 @@ class ProductIdentityResolver:
             return f"generic_{architecture}" if architecture != "frontend" else "unknown", "low", evidence
         return "unknown", "low", evidence
 
-    def _architecture_label(self, intelligence_result, contents: dict[str, object]) -> str:
+    def _architecture_label(self, intelligence_result, contents: dict[str, object], repo_type: str = "unknown") -> str:
+        if is_documentation_repo_type(repo_type):
+            return "unknown"
         arch = getattr(intelligence_result, "architecture", None)
         arch_type = str(getattr(arch, "type", arch or "unknown")).lower()
         if arch_type in {"frontend", "backend", "fullstack"}:
@@ -236,7 +261,7 @@ class ProductIdentityResolver:
             return "fullstack"
         if has_frontend:
             return "frontend"
-        return "backend"
+        return "unknown"
 
     def _ui_surface(self, contents: dict[str, object]) -> list[str]:
         paths = " ".join(str(path).replace("\\", "/").lower() for path in contents.keys())
@@ -334,7 +359,7 @@ class ProductIdentityResolver:
 
     def _purpose_summary(self, project_name: Optional[str], domain: str, domain_confidence: str, architecture: str, stack: str, capabilities: list[str], explicit_description: str, ui_surface: list[str], routes: list[str]) -> str:
         subject = project_name or ("this project" if architecture not in {"backend", "fullstack"} else f"this {architecture} service")
-        explicit_description = sanitize_text(explicit_description, fallback="")
+        explicit_description = self._clean_description_candidate(explicit_description)
         if domain == "repository_intelligence" and domain_confidence == "high":
             detail = f" The explicit product description says: {explicit_description}." if explicit_description else ""
             stack_text = f" It is built with {stack}." if stack else ""
@@ -360,6 +385,12 @@ class ProductIdentityResolver:
             "analytics": "an analytics platform",
             "devops": "a DevOps or automation tool",
         }
+        if domain == "software engineering education":
+            detail = f" The explicit product description says: {explicit_description}." if explicit_description else ""
+            return f"{subject} is a study-plan repository for software engineering interview preparation and structured learning resources.{detail}"
+        if domain == "documentation":
+            detail = f" The explicit product description says: {explicit_description}." if explicit_description else ""
+            return f"{subject} is a documentation-focused repository that organizes guides, reference material, and structured content.{detail}"
         if domain in domain_descriptions and domain_confidence in {"high", "medium"}:
             prefix = "is" if domain_confidence == "high" else "appears to be"
             detail = f" based on detected {', '.join(capabilities[:2])}" if capabilities else ""
@@ -388,14 +419,31 @@ class ProductIdentityResolver:
     def _readme_metadata(self, text: str) -> tuple[str, str]:
         title = ""
         description = ""
+        paragraph: list[str] = []
         for raw_line in text.splitlines():
             line = raw_line.strip()
             if not title and line.startswith("# "):
-                title = sanitize_text(line[2:], fallback="")
+                title = sanitize_text_for_display(line[2:], fallback="")
                 continue
-            if title and line and not line.startswith("#") and not line.startswith(("!", "[", "<", "-", "$", ">")):
-                description = sanitize_text(line, fallback="")
+            if not title or line.startswith(("#", "!", "[", "<", "$", ">")):
+                continue
+            if not line:
+                if paragraph:
+                    candidate = self._clean_description_candidate(" ".join(paragraph))
+                    if candidate:
+                        description = candidate
+                        break
+                    paragraph = []
+                continue
+            if line.startswith(("-", "*")):
+                continue
+            paragraph.append(line)
+            candidate = self._clean_description_candidate(" ".join(paragraph))
+            if candidate:
+                description = candidate
                 break
+        if not description and paragraph:
+            description = self._clean_description_candidate(" ".join(paragraph))
         return title, description
 
     def _pyproject_metadata(self, text: str) -> tuple[str, str]:
@@ -406,12 +454,24 @@ class ProductIdentityResolver:
             if stripped.startswith("name") and "=" in stripped and not name:
                 name = sanitize_text(stripped.split("=", 1)[1].strip(" '\""), fallback="")
             if stripped.startswith("description") and "=" in stripped and not description:
-                description = sanitize_text(stripped.split("=", 1)[1].strip(" '\""), fallback="")
+                description = self._clean_description_candidate(stripped.split("=", 1)[1].strip(" '\""))
         return name, description
 
-    def _clean_name(self, value: str) -> Optional[str]:
-        text = sanitize_text(value, fallback="").strip()
+    def _clean_description_candidate(self, value: object) -> str:
+        text = sanitize_text_for_display(str(value or ""), fallback="")
         if not text:
+            return ""
+        if is_markup_noise_candidate(text):
+            return ""
+        if not has_meaningful_identity_words(text, minimum=8) and not is_strong_identity_phrase(text):
+            return ""
+        return sanitize_text(text, fallback="")
+
+    def _clean_name(self, value: str) -> Optional[str]:
+        text = sanitize_text_for_display(value, fallback="").strip()
+        if not text:
+            return None
+        if is_markup_noise_candidate(text):
             return None
         text = re.sub(r"[-_]+", " ", text)
         parts = [part for part in text.split() if part]

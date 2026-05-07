@@ -7,6 +7,7 @@ from app.docs.utils.evidence_sanitizer import sanitize_text
 from app.docs.utils.production_text import safe_remaining_summary, safe_risk_summary
 from app.intelligence.consistency_validator import OutputConsistencyValidator
 from app.intelligence.output_guard import CanonicalOutputGuard
+from app.intelligence.readme_sanitizer import is_markup_noise_candidate
 
 class AHALPDF(FPDF):
     def header(self):
@@ -54,7 +55,24 @@ class PDFExporter:
         return self._safe_text(content, "Insufficient evidence from codebase.")
 
     def _remove_ignored_paths(self, text: str) -> str:
-        ignored = ["node_modules", ".venv", "site-packages", "__pycache__", "pip/_vendor", "type='", "confidence='", "reasoning=[", "evidence=[", "EvidenceItem(", "ArchitectureResult("]
+        ignored = [
+            "node_modules",
+            ".venv",
+            "site-packages",
+            "__pycache__",
+            "pip/_vendor",
+            "type='",
+            "confidence='",
+            "reasoning=[",
+            "evidence=[",
+            "EvidenceItem(",
+            "ArchitectureResult(",
+            "public/branding",
+            "logo-chatgpt-transparent",
+            "transparent.png",
+            ".png",
+            ".svg",
+        ]
         for ig in ignored:
             text = text.replace(ig, "[REDACTED]")
         return text
@@ -63,6 +81,9 @@ class PDFExporter:
         prd_result = self.validator.validate_export_prd(prd_result)
         snapshot = build_fact_snapshot(prd_result=prd_result)
         canonical = getattr(prd_result, "canonical_intelligence", None)
+        repo_type = str(getattr(canonical, "repo_type", "") or getattr(prd_result, "project_type", "") or "").lower()
+        api_title = "Dataset Overview" if repo_type == "dataset" else "Package/API Surface" if repo_type in {"python_package", "npm_package", "component_library", "sdk"} else "API Surface"
+        workflow_title = "Repository Structure" if repo_type in {"documentation", "curriculum", "knowledge_base"} else "Workflow"
         self._assert_canonical_domain_safety(prd_result)
         pdf = AHALPDF()
         export_warnings = self._meaningful_warnings(prd_result)
@@ -127,15 +148,15 @@ class PDFExporter:
         self._paragraph(pdf, self._section_intro(polished_text, "tech_stack"))
         self._render_tech_stack_table(pdf, snapshot)
 
-        self._section(pdf, "API Surface")
+        self._section(pdf, api_title)
         self._paragraph(pdf, self._section_intro(polished_text, "api_surface"))
-        self._render_api_table(pdf, getattr(prd_result, "api_endpoints", []))
+        self._render_api_table(pdf, getattr(prd_result, "api_endpoints", []), repo_type)
         
         self._section(pdf, "Core Modules")
         self._paragraph(pdf, self._section_intro(polished_text, "core_modules"))
         self._render_module_table(pdf, getattr(prd_result, "modules", []))
             
-        self._section(pdf, "Workflow")
+        self._section(pdf, workflow_title)
         self._paragraph(pdf, self._section_intro(polished_text, "workflow"))
         render_workflow_diagram(pdf, prd_result)
         
@@ -328,9 +349,14 @@ class PDFExporter:
             ))
         self._render_two_col_table(pdf, "Module", "Category | Description | Evidence", rows)
 
-    def _render_api_table(self, pdf, apis):
+    def _render_api_table(self, pdf, apis, repo_type: str = "unknown"):
         if not apis:
-            self._paragraph(pdf, "No API endpoints identified.")
+            if repo_type == "dataset":
+                self._paragraph(pdf, "Dataset content is described through repository files and metadata rather than HTTP endpoints.")
+            elif repo_type in {"python_package", "npm_package", "component_library", "sdk"}:
+                self._paragraph(pdf, "No HTTP API endpoints were identified. This repository appears to expose package/library APIs instead.")
+            else:
+                self._paragraph(pdf, "No API endpoints identified.")
             return
         rows = []
         for api in apis:
@@ -391,6 +417,9 @@ class PDFExporter:
             reason = self._safe_text(getattr(e, "reason", None), "")
             if not reason:
                 continue
+            evidence_file = self._safe_text(getattr(e, "file", None), "")
+            if is_markup_noise_candidate(evidence_file):
+                continue
             if "detected domain signals for" in reason.lower():
                 continue
             if "file extension maps to" in reason.lower():
@@ -405,7 +434,7 @@ class PDFExporter:
                     continue
             if getattr(e, "confidence", "medium") == "low":
                 continue
-            key = self._safe_text(getattr(e, "file", None)) + reason
+            key = evidence_file + reason
             if key not in seen:
                 seen.add(key)
                 dedup.append(e)
@@ -416,6 +445,8 @@ class PDFExporter:
             return
         for e in dedup[:20]:
             f = self._safe_text(getattr(e, "file", None), "configuration evidence")
+            if is_markup_noise_candidate(f):
+                continue
             r = self._safe_text(getattr(e, "reason", None), "")
             self._paragraph(pdf, f"- {f}: {r}")
         self._paragraph(pdf, "Additional evidence available in JSON export.")

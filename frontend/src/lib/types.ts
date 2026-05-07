@@ -1,5 +1,31 @@
 export type ConfidenceLevel = "High" | "Medium" | "Low"
-export type ProjectType = "frontend" | "backend" | "fullstack"
+export type ProjectType =
+  | "frontend"
+  | "backend"
+  | "fullstack"
+  | "documentation"
+  | "curriculum"
+  | "knowledge_base"
+  | "mobile_app"
+  | "cli_tool"
+  | "python_package"
+  | "npm_package"
+  | "component_library"
+  | "sdk"
+  | "plugin"
+  | "browser_extension"
+  | "vscode_extension"
+  | "ml_model_repo"
+  | "data_science_notebooks"
+  | "dataset"
+  | "template"
+  | "infrastructure"
+  | "devops_automation"
+  | "design_assets"
+  | "research_code"
+  | "monorepo"
+  | "mixed"
+  | "unknown"
 
 export interface SessionInfo {
   sessionId: string | null
@@ -55,7 +81,9 @@ export interface CanonicalIntelligenceResponse {
   session_id?: string
   project_name?: string
   project_type?: string
+  repo_type?: string
   product_summary?: string
+  project_goal?: string
   product_domain?: string
   architecture_summary?: string
   what?: string
@@ -160,6 +188,19 @@ export interface HealthResponse {
   version?: string
 }
 
+export interface LlmStatusResponse {
+  llm_enabled: boolean
+  chat_llm_enabled: boolean
+  docs_llm_enabled: boolean
+  model: string
+  provider?: string
+  key_present: boolean
+  last_error_type?: string | null
+  fallback_count?: number
+  rate_limited_until?: number | null
+  warnings?: string[]
+}
+
 export interface AnalyzeCodePayload {
   filename: string
   language: string
@@ -224,6 +265,7 @@ export interface BriefItem {
 export interface NormalizedIntelligence {
   projectName: string
   projectType: ProjectType
+  repoType?: string
   architectureConfidence: ConfidenceLevel | "Unknown"
   productPurposeConfidence: ConfidenceLevel | "Unknown"
   projectSummary: string

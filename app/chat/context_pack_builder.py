@@ -44,6 +44,16 @@ class ChatContextPackBuilder:
             "domain": sanitize_chat_text(getattr(canonical, "product_domain", None) or ""),
             "project_name": sanitize_chat_text(getattr(canonical, "project_name", None) or ""),
         }
+        if onboarding_report is not None:
+            project_identity["onboarding_report"] = {
+                "summary": sanitize_chat_text(getattr(onboarding_report, "summary", "") or ""),
+                "reading_order": self._select_onboarding(onboarding_report, normalized_intent),
+                "key_entry_points": [sanitize_chat_path(item) or sanitize_chat_text(item, "") for item in getattr(onboarding_report, "key_entry_points", [])[:8] if sanitize_chat_path(item) or sanitize_chat_text(item, "")],
+                "important_apis": [sanitize_chat_text(item, "") for item in getattr(onboarding_report, "important_apis", [])[:8] if sanitize_chat_text(item, "")],
+                "workflow_notes": [sanitize_chat_text(item, "") for item in getattr(onboarding_report, "main_workflows", [])[:6] if sanitize_chat_text(item, "")],
+                "gotchas": [sanitize_chat_text(item, "") for item in getattr(onboarding_report, "gotchas", [])[:6] if sanitize_chat_text(item, "")],
+                "avoid_first": [sanitize_chat_text(item, "") for item in getattr(onboarding_report, "avoid_first", [])[:6] if sanitize_chat_text(item, "")],
+            }
         architecture_summary = {
             "type": getattr(getattr(intelligence_result, "architecture", None), "type", "unknown"),
             "confidence": getattr(getattr(intelligence_result, "architecture", None), "confidence", "low"),
@@ -67,7 +77,7 @@ class ChatContextPackBuilder:
             scan_result,
         )
         conversation_memory = self._normalize_history(chat_history)
-        selected_evidence = filter_chat_evidence(selected_evidence, limit=8)
+        selected_evidence = filter_chat_evidence(selected_evidence, limit=6)
         evidence_map = {f"E{index}": evidence for index, evidence in enumerate(selected_evidence, start=1)}
 
         if scan_result is not None:
@@ -80,7 +90,7 @@ class ChatContextPackBuilder:
                         selected_evidence.append(ev)
                         if len(selected_evidence) >= 8:
                             break
-                selected_evidence = filter_chat_evidence(selected_evidence, limit=8)
+                selected_evidence = filter_chat_evidence(selected_evidence, limit=6)
                 evidence_map = {f"E{index}": evidence for index, evidence in enumerate(selected_evidence, start=1)}
 
         confidence = self._confidence_score(normalized_intent.confidence, selected_evidence, relevant_apis, relevant_modules)
@@ -96,7 +106,7 @@ class ChatContextPackBuilder:
             relevant_risks=relevant_risks[:max_items],
             relevant_test_gaps=relevant_test_gaps[:max_items],
             relevant_onboarding_steps=relevant_onboarding_steps[:max_items],
-            selected_evidence=selected_evidence[:8],
+            selected_evidence=selected_evidence[:6],
             conversation_memory=conversation_memory[-config.scanner.chat_max_history_messages :],
             warnings=list(dict.fromkeys(warnings)),
             confidence=confidence,

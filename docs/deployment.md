@@ -43,7 +43,24 @@ The default compose setup keeps:
 
 1. Copy `.env.example` to `.env`.
 2. Set `GEMINI_API_KEY=`.
-3. Change `AHAL_LLM_ENABLED=true` only when you want optional LLM features enabled.
+3. Set `AHAL_LLM_PROVIDER=gemini`.
+4. Use `AHAL_LLM_MODEL=gemma-4-26b-a4b-it`.
+5. If you enable global LLMs, chat/docs polish can inherit automatically:
+
+```env
+AHAL_LLM_ENABLED=true
+AHAL_CHAT_LLM_ENABLED=true
+AHAL_DOCS_LLM_ENABLED=true
+AHAL_PRD_LLM_ENABLED=true
+AHAL_PDF_LLM_ENABLED=true
+AHAL_LLM_REQUIRE_VALIDATION=true
+AHAL_CHAT_LLM_REQUIRE_VALIDATION=true
+AHAL_LLM_TIMEOUT_SECONDS=180
+AHAL_LLM_MAX_RETRIES=1
+AHAL_LLM_RETRY_ON_404=false
+AHAL_LLM_RETRY_ON_429=true
+AHAL_LLM_RATE_LIMIT_COOLDOWN_SECONDS=60
+```
 
 AHAL still runs without Gemini.
 
@@ -106,7 +123,8 @@ Docker uses this endpoint for container health checks.
 ## Common Troubleshooting
 
 - If uploads fail, verify port `8000` is available and the container can write temporary files.
-- If optional Gemini features do not activate, confirm `AHAL_LLM_ENABLED=true` and that `GEMINI_API_KEY` is set in your local `.env`.
+- If optional Gemma polish does not activate, confirm `AHAL_LLM_PROVIDER=gemini`, `AHAL_LLM_MODEL=gemma-4-26b-a4b-it`, `AHAL_LLM_ENABLED=true`, and that `GEMINI_API_KEY` is set in your local `.env`.
+- `GET /analyze/llm/status` exposes enablement flags, fallback counters, and the last LLM error without leaking secrets.
 - If Docker Compose starts without MongoDB, that is expected unless you enable the `mongo` profile.
 - If you turn on MongoDB mode without a Mongo-compatible client installed, AHAL will fail clearly instead of silently switching storage behavior.
 - If webhook requests are rejected, confirm `AHAL_GITHUB_WEBHOOK_ENABLED=true` and that your GitHub webhook secret matches `AHAL_GITHUB_WEBHOOK_SECRET`.

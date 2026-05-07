@@ -1,87 +1,49 @@
-"""Gemini-backed answer client for Phase 4 chat."""
+"""Gemini-backed answer client for Phase 4 chat.
+
+Compatibility wrapper. New code should use app.llm.polish_orchestrator.
+"""
 
 from __future__ import annotations
 
-import json
-import logging
-from typing import Optional
-from urllib import request as urllib_request
-from urllib.error import URLError
-
-from app.config import config
-
-logger = logging.getLogger("ahal.chat.gemini")
-
-_GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models"
-    "/{model}:generateContent?key={api_key}"
-)
+from app.config import GEMMA_4_26B_UNAVAILABLE_WARNING, config
+from app.llm.gemma_client import urllib_request
+from app.llm.errors import LLMError
+from app.llm.gemma_client import GemmaClient
 
 
 class GeminiChatClient:
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        timeout: Optional[int] = None,
-        enabled: Optional[bool] = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        timeout: int | None = None,
+        enabled: bool | None = None,
     ) -> None:
-        self._api_key = api_key if api_key is not None else config.scanner.gemini_api_key
-        self._model = model if model is not None else config.scanner.llm_model
-        self._timeout = timeout if timeout is not None else config.scanner.llm_timeout_seconds
-        self._enabled = config.scanner.llm_enabled if enabled is None else enabled
+        self._client = GemmaClient(
+            api_key=api_key,
+            model=model or config.scanner.chat_llm_model,
+            timeout=timeout,
+            enabled=config.scanner.chat_llm_enabled if enabled is None else enabled,
+        )
 
     @property
     def enabled(self) -> bool:
-        return self._enabled
+        return self._client.enabled
 
     @property
     def model_name(self) -> str:
-        return self._model
+        return self._client.model
 
     def generate(self, prompt: str) -> dict:
-        if not self._enabled:
-            logger.info("LLM disabled")
-            return {"ok": False, "text": "", "error": "LLM disabled"}
-            
-        if not self._api_key:
-            logger.warning("Gemini API key missing")
+        if self._client.enabled and not self._client.api_key:
             return {"ok": False, "text": "", "error": "Gemini API key missing"}
-
-        url = _GEMINI_URL.format(model=self._model, api_key=self._api_key)
-        payload = json.dumps(
-            {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
-            }
-        ).encode("utf-8")
-
-        req = urllib_request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            with urllib_request.urlopen(req, timeout=self._timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                text = ""
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        text = parts[0].get("text", "") or ""
-                
-                if not text:
-                    logger.warning("Gemini response empty")
-                else:
-                    logger.info("Gemini success")
-                    
-                return {"ok": True, "text": text, "error": None}
-        except (URLError, json.JSONDecodeError, ValueError) as exc:
-            logger.error("Gemini API call failed: %s", exc)
-            return {"ok": False, "text": "", "error": f"Gemini API call failed: {exc}"}
-        except Exception as exc:
-            logger.error("Gemini API call failed unexpectedly: %s", type(exc).__name__)
-            return {"ok": False, "text": "", "error": f"Gemini API call failed: {type(exc).__name__}"}
+            result = self._client.generate_text(prompt, temperature=0.1, max_tokens=2048)
+            return {"ok": True, "text": result.text, "error": None}
+        except LLMError as exc:
+            error_type = getattr(exc, "error_type", None)
+            if error_type in {"MODEL_OR_ENDPOINT_NOT_FOUND", "RATE_LIMITED", "TIMEOUT"}:
+                error = getattr(exc, "user_warning", GEMMA_4_26B_UNAVAILABLE_WARNING)
+            else:
+                error = f"Gemini API call failed: {type(exc).__name__}"
+            return {"ok": False, "text": "", "error": error, "status": error_type}

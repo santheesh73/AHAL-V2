@@ -1,6 +1,10 @@
 from app.chat.answer_composer_v2 import AnswerComposerV2
+from app.chat.chat_engine import ChatEngine
 from app.chat.models import ChatContextPack, ChatIntentEntities, ChatIntentResult, EvidenceReference
 from app.chat.utils import evidence_display_label
+from app.graph.graph_engine import KnowledgeGraphEngine
+from app.intelligence.intelligence_engine import IntelligenceEngine
+from tests.intelligence.test_product_identity_noise_filter import noisy_fullstack_scan
 
 
 def make_context_pack() -> ChatContextPack:
@@ -111,3 +115,42 @@ def test_project_overview_suggested_followups_present():
     answer = composer.compose("What does this project do?", intent, context_pack)
 
     assert answer.suggested_followups[:3] == ["What is built?", "What APIs exist?", "What risks should I review?"]
+
+
+def test_duplicate_section_titles_removed_as_final_cleanup():
+    composer = AnswerComposerV2()
+    context_pack = make_context_pack()
+    intent = ChatIntentResult(intent="project_overview", confidence="medium", entities=ChatIntentEntities())
+    llm_result = {
+        "answer": "Answer.",
+        "short_answer": "Answer.",
+        "sections": [
+            {"title": "What it is", "content": "Same section.", "bullets": [], "evidence_ids": []},
+            {"title": "What it is", "content": "Same section.", "bullets": [], "evidence_ids": []},
+        ],
+        "warnings": [],
+        "suggested_followups": [],
+    }
+
+    answer = composer.compose("What does this project do?", intent, context_pack, llm_result=llm_result)
+
+    assert [section.title for section in answer.sections].count("What it is") == 1
+
+
+def test_chat_no_html_markup():
+    scan = noisy_fullstack_scan()
+    intelligence = IntelligenceEngine().analyze(scan)
+    graph = KnowledgeGraphEngine().build(scan, intelligence)
+
+    answer = ChatEngine().answer("What does this project do?", scan, intelligence, graph)
+    rendered = " ".join(
+        [
+            answer.answer,
+            answer.short_answer or "",
+            " ".join(section.content for section in answer.sections),
+            " ".join(" ".join(section.bullets) for section in answer.sections),
+        ]
+    ).lower()
+
+    for token in ("<p", "<img", "src=", "alt=", "width=", "logo-chatgpt-transparent"):
+        assert token not in rendered

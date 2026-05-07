@@ -67,7 +67,9 @@ class CanonicalProjectIntelligence(BaseModel):
     session_id: str
     project_name: str
     project_type: str
+    repo_type: str = "unknown"
     product_summary: str
+    project_goal: str = ""
     product_domain: str
     architecture_summary: str
     what: str

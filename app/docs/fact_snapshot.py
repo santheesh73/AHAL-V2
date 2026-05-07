@@ -4,6 +4,12 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.intelligence.repository_type_classifier import (
+    RepositoryTypeClassifier,
+    is_documentation_repo_type,
+    looks_like_markdown_document,
+)
+
 
 class PRDFactSnapshot(BaseModel):
     has_tests: bool = False
@@ -21,13 +27,15 @@ class PRDFactSnapshot(BaseModel):
     database_names: list[str] = Field(default_factory=list)
     frontend_frameworks: list[str] = Field(default_factory=list)
     backend_frameworks: list[str] = Field(default_factory=list)
-    project_type: str = "backend"
+    project_type: str = "unknown"
+    repo_type: str = "unknown"
     domain: Optional[str] = None
     domain_confidence: str = "low"
     product_purpose_known: bool = False
 
 
 def build_fact_snapshot(scan_result=None, intelligence_result=None, prd_result=None, product_identity=None) -> PRDFactSnapshot:
+    repo_type_classifier = RepositoryTypeClassifier()
     contents = getattr(scan_result, "contents", {}) if scan_result is not None else {}
     if not isinstance(contents, dict):
         contents = {}
@@ -107,7 +115,8 @@ def build_fact_snapshot(scan_result=None, intelligence_result=None, prd_result=N
     has_ci_cd = any(marker in path.lower() for path in all_paths for marker in (".github/workflows", "gitlab-ci", "azure-pipelines"))
     has_auth = _has_auth_indicators(modules, dependencies, contents)
 
-    project_type = _project_type(intelligence_result, prd_result, path_text, framework_names)
+    repo_type = repo_type_classifier.classify(scan_result=scan_result, intelligence_result=intelligence_result, product_identity=product_identity).repo_type
+    project_type = _project_type(intelligence_result, prd_result, path_text, framework_names, repo_type)
     has_frontend = project_type in {"frontend", "fullstack"}
     has_backend = project_type in {"backend", "fullstack"}
 
@@ -142,6 +151,7 @@ def build_fact_snapshot(scan_result=None, intelligence_result=None, prd_result=N
         frontend_frameworks=frontend_frameworks,
         backend_frameworks=backend_frameworks,
         project_type=project_type,
+        repo_type=repo_type,
         domain=domain,
         domain_confidence=domain_confidence,
         product_purpose_known=product_purpose_known,
@@ -194,7 +204,9 @@ def _has_auth_indicators(modules, dependencies, contents: dict[str, object]) -> 
     return any("auth" in str(path).lower() for path in contents.keys())
 
 
-def _project_type(intelligence_result, prd_result, path_text: str, framework_names: list[str]) -> str:
+def _project_type(intelligence_result, prd_result, path_text: str, framework_names: list[str], repo_type: str = "unknown") -> str:
+    if is_documentation_repo_type(repo_type):
+        return repo_type
     arch_value = ""
     if prd_result is not None:
         arch_value = str(getattr(prd_result, "architecture_label", "") or getattr(prd_result, "project_type", "") or "").lower()
@@ -210,7 +222,7 @@ def _project_type(intelligence_result, prd_result, path_text: str, framework_nam
         return "fullstack"
     if has_frontend:
         return "frontend"
-    return "backend"
+    return "unknown"
 
 
 def _extract_known_tokens(text: str, tokens: tuple[str, ...]) -> list[str]:
@@ -238,6 +250,8 @@ def _infer_languages(paths: list[str], contents: dict[str, object]) -> list[str]
         for suffix, language in language_map.items():
             if lowered.endswith(suffix) and language not in rows:
                 rows.append(language)
+        if looks_like_markdown_document(lowered) and "Markdown" not in rows:
+            rows.append("Markdown")
     lowered_keys = {str(key).lower() for key in contents.keys()}
     if any(key.endswith(("requirements.txt", "pyproject.toml")) for key in lowered_keys) and "Python" not in rows:
         rows.append("Python")

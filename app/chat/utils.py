@@ -286,7 +286,7 @@ def build_followups(intent: str, api_paths: list[str] | None = None) -> list[str
         "module_explanation": ["What APIs depend on this module?", "What tests are missing here?", "How should a new engineer modify it?"],
         "risk_analysis": ["What tests should be added?", "Which API is most risky?", "What should a new engineer avoid first?"],
         "test_gap_question": ["Which gap matters most?", "What is risky?", "How should we add tests safely?"],
-        "onboarding_question": ["What is built?", "Explain the architecture.", "How do I run this project?"],
+        "onboarding_question": ["What APIs exist?", "How does the main workflow work?", "What should I avoid changing first?", "What tests should be added?"],
         "change_impact_question": ["What module is affected most?", "What tests should be added?", "What workflow could break?"],
         "how_to_run": ["What does this project do?", "What is built?", "What should a new engineer read first?"],
         "how_to_modify": ["Which module owns this?", "What tests should be added?", "What is risky?"],

@@ -35,15 +35,16 @@ class PDFNarrativePolishService:
 
         from app.intelligence.llm.gemini_client import GeminiClient
 
+        client = GeminiClient()
         try:
-            response_text = GeminiClient().generate(prompt)
+            response_text = client.generate(prompt)
         except Exception as exc:
             logger.error("PDF narrative polish failed: %s", exc)
-            warnings.append("LLM unavailable: Gemini API call failed; returned deterministic PDF narrative.")
+            warnings.append(getattr(client, "last_error", "") or "LLM unavailable: Gemini API call failed; returned deterministic PDF narrative.")
             return {}, warnings
 
         if not response_text:
-            warnings.append("LLM unavailable: Gemini API call failed; returned deterministic PDF narrative.")
+            warnings.append(getattr(client, "last_error", "") or "LLM unavailable: Gemini API call failed; returned deterministic PDF narrative.")
             return {}, warnings
 
         overrides, validation_warnings = self._validate_response(prd_result, sections, response_text)

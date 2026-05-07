@@ -278,6 +278,19 @@ export function DashboardPage() {
     )
   }
 
+  const repoType = String(intelligence.repoType || intelligence.projectType).toLowerCase()
+  const isDocumentationRepo = ["documentation", "curriculum", "knowledge_base"].includes(repoType)
+  const isPackageRepo = ["python_package", "npm_package", "component_library", "sdk"].includes(repoType)
+  const isDatasetRepo = repoType === "dataset"
+  const workflowTitle = isDocumentationRepo ? "Repository Structure" : "Workflow"
+  const apiTitle = isDatasetRepo ? "Dataset Overview" : isPackageRepo ? "Package/API Surface" : "API Surface"
+  const apiEmptyMessage = isDatasetRepo
+    ? "No dataset records were detected for this session."
+    : isPackageRepo
+      ? "No HTTP API endpoints were detected. This repository appears to expose package/library APIs instead."
+      : "No API endpoints were detected for this session."
+  const showApiSurface = !isDocumentationRepo || intelligence.apiSurface.length > 0 || isPackageRepo || isDatasetRepo
+
   return (
     <AppShell
       title={intelligence.projectName}
@@ -318,8 +331,10 @@ export function DashboardPage() {
 
         <ScrollReveal delay={0.04}><ProjectBriefGrid intelligence={intelligence} /></ScrollReveal>
         <ScrollReveal delay={0.08}><TechnicalGrid intelligence={intelligence} /></ScrollReveal>
-        <ScrollReveal delay={0.1}><ApiSurfaceTable items={intelligence.apiSurface} /></ScrollReveal>
-        <ScrollReveal delay={0.12}><WorkflowPanel steps={intelligence.workflow} /></ScrollReveal>
+        {showApiSurface ? (
+          <ScrollReveal delay={0.1}><ApiSurfaceTable items={intelligence.apiSurface} title={apiTitle} emptyMessage={apiEmptyMessage} /></ScrollReveal>
+        ) : null}
+        <ScrollReveal delay={0.12}><WorkflowPanel steps={intelligence.workflow} title={workflowTitle} /></ScrollReveal>
         <ScrollReveal delay={0.14}><TimelinePanel items={timeline} /></ScrollReveal>
         <ScrollReveal delay={0.16}><RiskPanel items={intelligence.issues.map((item) => ({
           severity: item.severity === "Unknown" || item.severity === "Neutral" ? "Low" : item.severity as "High" | "Medium" | "Low",

@@ -2,46 +2,34 @@ import logging
 from app.config import config
 from app.docs.models import PRDResult
 from app.docs.llm.prd_prompt_builder import PRDPromptBuilder
+from app.llm.polish_orchestrator import PolishOrchestrator
 
 logger = logging.getLogger("ahal.docs.polish")
 
 class PRDPolishService:
+    """Compatibility wrapper. New code should use app.llm.polish_orchestrator."""
+
     def __init__(self):
         self.prompt_builder = PRDPromptBuilder()
+        self.polisher = PolishOrchestrator()
 
     def polish(self, prd_result: PRDResult, markdown: str) -> tuple[str, list[str]]:
         warnings = []
-        if not config.scanner.llm_enabled:
+        if not config.scanner.llm_enabled or not config.scanner.docs_llm_enabled or not config.scanner.prd_llm_enabled:
             warnings.append("LLM disabled; returned deterministic PRD.")
             return markdown, warnings
-            
-        api_key = config.scanner.gemini_api_key
-        if not api_key:
-            warnings.append("LLM unavailable: Gemini API key missing; returned deterministic PRD.")
+        canonical = getattr(prd_result, "canonical_intelligence", None)
+        if canonical is None:
+            return markdown, ["LLM polish unavailable — deterministic PRD shown."]
+        polished_md, warnings = self.polisher.polish_markdown(canonical, markdown)
+        if warnings:
             return markdown, warnings
-
-        from app.intelligence.llm.gemini_client import GeminiClient
-        client = GeminiClient()
-        
-        prompt = self.prompt_builder.build_polish_prompt(prd_result)
-        
-        try:
-            polished_md = client.generate(prompt, model=config.scanner.llm_model, timeout=config.scanner.llm_timeout_seconds)
-            if not polished_md:
-                warnings.append("LLM unavailable: Gemini API call failed; returned deterministic PRD.")
-                return markdown, warnings
-                
-            is_valid, validation_warnings = self._validate_polished(prd_result, polished_md)
-            if not is_valid:
-                warnings.append("LLM polished PRD failed validation; returned deterministic PRD.")
-                warnings.extend(validation_warnings)
-                return markdown, warnings
-                
-            return polished_md, []
-        except Exception as e:
-            logger.error("Error during PRD polishing: %s", e)
-            warnings.append("LLM unavailable: Gemini API call failed; returned deterministic PRD.")
+        is_valid, validation_warnings = self._validate_polished(prd_result, polished_md)
+        if not is_valid:
+            warnings = ["LLM polished PRD failed validation; returned deterministic PRD."]
+            warnings.extend(validation_warnings)
             return markdown, warnings
+        return polished_md, []
 
     def _validate_polished(self, prd_result: PRDResult, polished_md: str) -> tuple[bool, list[str]]:
         warnings = []

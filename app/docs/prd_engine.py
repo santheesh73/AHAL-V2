@@ -75,7 +75,7 @@ class PRDEngine:
 
         # 2. architecture
         try:
-            architecture = self.arch_gen.generate(intelligence_result)
+            architecture = self.arch_gen.generate(intelligence_result, snapshot=snapshot)
             warnings.extend(architecture.warnings)
         except Exception as e:
             logger.error(f"Error generating architecture: {e}")

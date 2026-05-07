@@ -14,15 +14,15 @@ import { Textarea } from "../ui/Textarea"
 
 const starterQuestions = [
   "What does this project do?",
+  "Why does this project exist?",
   "What is built?",
   "What remains?",
-  "Explain the architecture.",
   "What APIs exist?",
-  "What are the highest risks?",
+  "Explain the architecture.",
+  "How does the main workflow work?",
+  "What risks should I review?",
   "What tests should be added?",
   "What should a new engineer read first?",
-  "How does the main workflow work?",
-  "How do I run this project?",
 ]
 
 function SectionBlock({ section, evidence }: { section: ChatAnswerSection; evidence: string[] }) {
@@ -66,9 +66,22 @@ function alignAssistantMessageWithCanonical(message: ChatMessage, intelligence?:
     return message
   }
 
+  const unsupportedTerms = [
+    /content management application/i,
+    /\bCMS\b/i,
+    /\becommerce\b/i,
+    /financial research/i,
+    /finance workflows/i,
+    /Backend API Layer/i,
+    /unfamiliar codebases/i,
+    /repository-aware questions/i,
+    /\.env\.example/i,
+    /mongodb:\/\/[^\s)]+/i,
+  ]
+
   const replaceLeak = (value?: string) => {
     const text = safeText(value, "")
-    if (!/content management application/i.test(text)) {
+    if (!unsupportedTerms.some((pattern) => pattern.test(text))) {
       return value ?? ""
     }
     return what || summary || text.replace(/content management application/gi, "developer intelligence platform")
@@ -175,6 +188,7 @@ export function ChatPanel({ sessionId, intelligence }: { sessionId: string; inte
             const totalEvidenceCount = uniqueEvidence(normalizedMessage.evidence ?? [], 99).length
             const hiddenCount = Math.max(totalEvidenceCount - evidenceLabels.length, 0)
             const sections = normalizedMessage.sections ?? []
+            const isOnboarding = normalizedMessage.intent === "onboarding_question"
 
             return (
               <div
@@ -210,7 +224,11 @@ export function ChatPanel({ sessionId, intelligence }: { sessionId: string; inte
                 {normalizedMessage.role === "assistant" && sections.length ? (
                   <div className="mt-4 space-y-3">
                     {sections.map((section) => (
-                      <SectionBlock key={`${normalizedMessage.id}-${section.title}`} section={section} evidence={showEvidence ? evidenceLabels : []} />
+                      <SectionBlock
+                        key={`${normalizedMessage.id}-${section.title}`}
+                        section={section}
+                        evidence={showEvidence && (!isOnboarding || section.title.toLowerCase().includes("key files")) ? evidenceLabels.slice(0, isOnboarding ? 5 : 6) : []}
+                      />
                     ))}
                   </div>
                 ) : null}
@@ -219,7 +237,7 @@ export function ChatPanel({ sessionId, intelligence }: { sessionId: string; inte
                   <p className="mt-4 wrap-break-word text-sm leading-7 text-slate-300">{safeText(normalizedMessage.content, "No answer was returned.")}</p>
                 ) : null}
 
-                {normalizedMessage.role === "assistant" && evidenceLabels.length ? (
+                {normalizedMessage.role === "assistant" && evidenceLabels.length && !isOnboarding ? (
                   <div className="mt-4">
                     <button
                       type="button"

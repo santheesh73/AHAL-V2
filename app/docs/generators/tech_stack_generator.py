@@ -36,6 +36,9 @@ class TechStackGenerator:
             content_lines.append(f"Key Dependencies: {', '.join(dep_names)}")
             for dep in dependencies:
                 evidence.extend(dep.evidence)
+
+        if not frameworks:
+            content_lines.append("Frameworks: No framework evidence identified")
                 
         if not content_lines:
             warnings.append("No tech stack detected.")
