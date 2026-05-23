@@ -61,7 +61,7 @@ The project is structured for developers who want to inspect large codebases, up
 | DevOps | Docker, Docker Compose, Makefile |
 | Storage | Memory backend, optional MongoDB |
 | AI/LLM | Gemini-compatible configuration |
-| PDF/Reports | fpdf2 |
+| PDF/Reports | pdf |
 
 ---
 
