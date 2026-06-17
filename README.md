@@ -188,40 +188,6 @@ G --> I
 
 ---
 
-# 🎬 Product Demo
-
-## Dashboard
-
-<p align="center">
-<img src="assets/screenshots/dashboard.png" width="1000">
-</p>
-
----
-
-## AI Project Analysis
-
-<p align="center">
-<img src="assets/screenshots/analysis.png" width="1000">
-</p>
-
----
-
-## Conversational Intelligence
-
-<p align="center">
-<img src="assets/screenshots/chatbot.gif" width="1000">
-</p>
-
----
-
-## Generated Reports
-
-<p align="center">
-<img src="assets/screenshots/report.png" width="1000">
-</p>
-
----
-
 # 🚀 Installation Guide
 
 ## Clone Repository
